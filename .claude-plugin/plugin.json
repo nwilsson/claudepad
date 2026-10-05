@@ -1,0 +1,6 @@
+{
+  "name": "notepad",
+  "version": "0.1.0",
+  "description": "A built-in notepad pane: quick notes, todos, pinned context for Claude, and tools so Claude can jot notes too",
+  "types": "./types/index.d.ts"
+}
