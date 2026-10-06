@@ -5,3 +5,6 @@
 Thumbs.db
 .DS_Store
 node_modules/
+
+# Laid by the engine on a live load
+.claude-plugin/types/

@@ -1,11 +1,11 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 const PANE = {
-  plugin: 'notepad',
+  plugin: 'claudepad',
   component: 'Pane',
-  requestId: 'notepad',
+  requestId: 'claudepad',
   props: {
-    title: 'Notepad',
+    title: 'claudepad',
     isFocused: true,
     bodyColumns: 80,
     placement: 'dock',

@@ -3,22 +3,22 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { EditorSession, Note, Scope } from '../types'
 
-const PANE = 'notepad'
+const PANE = 'claudepad'
 const STORE_KEY = 'notes'
-const ADD_TOOL = 'mcp__notepad__add_note'
-const LIST_TOOL = 'mcp__notepad__list_notes'
+const ADD_TOOL = 'mcp__claudepad__add_note'
+const LIST_TOOL = 'mcp__claudepad__list_notes'
 
-const notes = atom({ plugin: 'notepad', key: 'notes' } as const, [] as Note[])
-const editor = atom({ plugin: 'notepad', key: 'editor' } as const, null as EditorSession | null)
-const draft = atom({ plugin: 'notepad', key: 'draft' } as const, '')
-const isLineMode = atom({ plugin: 'notepad', key: 'isLineMode' } as const, false)
+const notes = atom({ plugin: 'claudepad', key: 'notes' } as const, [] as Note[])
+const editor = atom({ plugin: 'claudepad', key: 'editor' } as const, null as EditorSession | null)
+const draft = atom({ plugin: 'claudepad', key: 'draft' } as const, '')
+const isLineMode = atom({ plugin: 'claudepad', key: 'isLineMode' } as const, false)
 const EDITOR_MODULE = './editor.tsx'
 
 /** Continuation lines of a multi-line note, indented to sit under its first line. */
 const indented = (text: string, by: string) => text.replace(/\n/g, `\n${by}`)
-const scope = atom({ plugin: 'notepad', key: 'scope' } as const, 'project' as Scope)
-const query = atom({ plugin: 'notepad', key: 'query' } as const, '')
-const activeTag = atom({ plugin: 'notepad', key: 'tag' } as const, null as string | null)
+const scope = atom({ plugin: 'claudepad', key: 'scope' } as const, 'project' as Scope)
+const query = atom({ plugin: 'claudepad', key: 'query' } as const, '')
+const activeTag = atom({ plugin: 'claudepad', key: 'tag' } as const, null as string | null)
 
 /** A tag is `#` then letters, digits, `_` or `-`, at the start or after a space. */
 const TAG = /(^|\s)#([\p{L}\p{N}_-]+)/gu
@@ -105,7 +105,7 @@ const addNote = async ($: EngineInterface, text: string, author: Note['author'],
 }
 
 const openPane = ($: EngineInterface) =>
-  $.ui.open({ id: PANE, title: 'Notepad', focus: true })
+  $.ui.open({ id: PANE, title: 'claudepad', focus: true })
 
 const lines = (list: readonly Note[]) =>
   list
@@ -143,7 +143,7 @@ const asText = (list: readonly Note[], project: string, search = '') => {
 
 const EXPORT_FILE = 'NOTES.md'
 /** First line of every export, so a later export knows the file is ours to replace. */
-const EXPORT_MARK = '<!-- exported by the Claude Code notepad mod; re-exporting replaces this file -->'
+const EXPORT_MARK = '<!-- exported by the claudepad mod for Claude Code; re-exporting replaces this file -->'
 
 const toMarkdown = (list: readonly Note[], project: string) => {
   const ordered = (subset: Note[]) =>

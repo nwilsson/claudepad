@@ -29,7 +29,7 @@ export type EditorSession = {
 
 declare module 'claude-code' {
   interface PluginState {
-    notepad: {
+    claudepad: {
       notes: Note[]
       /** The open multi-line editor, or null. */
       editor: EditorSession | null

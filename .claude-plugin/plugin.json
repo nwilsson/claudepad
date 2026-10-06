@@ -1,6 +1,12 @@
 {
-  "name": "notepad",
+  "name": "claudepad",
+  "displayName": "claudepad",
+  "description": "A notepad pane for Claude Code: per-project and global notes, tags, search, a multi-line editor, NOTES.md sync, pinned notes sent as context, and tools so Claude can jot notes too.",
   "version": "0.1.0",
-  "description": "A built-in notepad pane: quick notes, todos, pinned context for Claude, and tools so Claude can jot notes too",
+  "author": { "name": "Noel Wilsson", "url": "https://github.com/nwilsson" },
+  "homepage": "https://github.com/nwilsson/claudepad",
+  "repository": "https://github.com/nwilsson/claudepad",
+  "license": "MIT",
+  "keywords": ["claude-code", "mod", "notes", "notepad", "todo", "productivity"],
   "types": "./types/index.d.ts"
 }
