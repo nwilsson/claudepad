@@ -76,11 +76,6 @@ claude plugin test .         # tests/*.test.tsx, run in the engine's own sandbox
 same version. CI runs it on every push and pull request, without tsc: the
 types only exist once the engine has loaded the plugin.
 
-## Credits
-
-Repo layout, check script and CI follow
-[glass](https://github.com/rashedInt32/glass).
-
 ## License
 
 MIT
