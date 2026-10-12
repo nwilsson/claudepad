@@ -2,9 +2,11 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   dueOf,
+  editorCommand,
   exportOrder,
   groupByKey,
   keyOfProject,
+  linksOf,
   localDate,
   mergeImport,
   migrate,
@@ -15,6 +17,7 @@ import {
   parseNoteArgs,
   matches,
   preview,
+  resolvePath,
   statusFor,
   tagCounts,
   tagged,
@@ -186,4 +189,27 @@ test('overdue: open notes here and global due before today, earliest first; stat
   ])
   expect(statusFor(list, '/work/demo', '2026-10-12')).toBe('📝 3 here · 2 global · ⏰ 2 overdue')
   expect(statusFor(list, '/work/demo')).toBe('📝 3 here · 2 global')
+})
+
+test('a file reference is a path with an extension, then :line and maybe :column', () => {
+  expect(linksOf('see hooks/register.tsx:42, then (E:\\Code\\x.ts:3:7) and `README.md:1`')).toEqual([
+    { path: 'hooks/register.tsx', line: 42, text: 'hooks/register.tsx:42' },
+    { path: 'E:\\Code\\x.ts', line: 3, column: 7, text: 'E:\\Code\\x.ts:3:7' },
+    { path: 'README.md', line: 1, text: 'README.md:1' },
+  ])
+  // Not references: no extension, a URL, a time, a line number glued to more.
+  expect(linksOf('localhost:3000 https://x.dev/a.ts:3 at 10:30 a.ts:12b Makefile:3')).toEqual([])
+})
+
+test('a reference resolves under the note folder unless absolute, and opens in the chosen editor', () => {
+  expect(resolvePath('src/a.ts', 'E:\\Code\\X\\')).toBe('E:\\Code\\X/src/a.ts')
+  expect(resolvePath('./a.ts', '/work/demo')).toBe('/work/demo/a.ts')
+  expect(resolvePath('/etc/a.conf', '/work/demo')).toBe('/etc/a.conf')
+  expect(resolvePath('C:/b.ts', '/work/demo')).toBe('C:/b.ts')
+
+  expect(editorCommand('vscode', '/w/a.ts', { line: 4 })).toEqual(['code', '-g', '/w/a.ts:4'])
+  expect(editorCommand('cursor', '/w/a.ts', { line: 4, column: 2 })).toEqual(['cursor', '-g', '/w/a.ts:4:2'])
+  expect(editorCommand('jetbrains', '/w/a.ts', { line: 4, column: 2 })).toEqual([
+    'idea', '--line', '4', '--column', '2', '/w/a.ts',
+  ])
 })

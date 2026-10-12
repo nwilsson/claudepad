@@ -52,7 +52,9 @@ or more).
   - Not done: sorting by due date, and telling Claude which notes are overdue (`list_notes` shows the dates as written).
 - [x] "Save last response as note."
   - `/note --last [text]` (with `-g` for global, flags in any order before the text) and a pane button save the main conversation's last assistant message with text, read from `$.session.messages()` when asked, so it works after a reload too. Any text becomes the first line. The note is yours (`author: 'you'`): you chose to save it. A long reply is saved whole.
-- [ ] Notes can carry a `path:line` link that opens the file.
+- [x] Notes can carry a `path:line` link that opens the file.
+  - A path with an extension, then `:line` and maybe `:column`, standing alone in the text (`linksOf()`), gets an **open** button in the pane (up to three per note). It runs the editor through `$.process.run`, so it works in any terminal but only where the session runs locally. The mod's `editor` option (a picker: `vscode`, the default, `cursor`, `jetbrains`) picks `code -g`, `cursor -g` or `idea --line`. A relative path resolves under the session's folder for this project's and the global notes, and under the stored (lowercased) project folder for another project's, which can miss on a case-sensitive file system. A failed command is a toast.
+  - Probed on this machine: `$.process.run(['code', ...])` starts VS Code's `code.cmd` on Windows with no shell.
 
 ## Phase 4: sync and workflow (M–L)
 

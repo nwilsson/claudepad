@@ -2,7 +2,9 @@ import { atom, derive, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { DeletedNote, EditorSession, Note, Scope } from '../types'
+import type { Editor, FileLink } from './notes'
 import {
+  EDITORS,
   EXPORT_FILE,
   EXPORT_MARK,
   GLOBAL_KEY,
@@ -10,6 +12,7 @@ import {
   TAG,
   asText,
   baseName,
+  editorCommand,
   groupByKey,
   indented,
   isGlobal,
@@ -17,6 +20,7 @@ import {
   isNotesKey,
   keyOf,
   keyOfProject,
+  linksOf,
   localDate,
   matches,
   mergeImport,
@@ -29,6 +33,7 @@ import {
   parseNoteArgs,
   plural,
   preview,
+  resolvePath,
   statusFor,
   tagCounts,
   tagged,
@@ -60,6 +65,9 @@ const pinned = derive([notes], list => list.filter(note => note.isPinned && !not
 
 /** How long the pane offers to undo a delete. */
 const UNDO_MS = 5000
+
+/** The most open buttons one note gets, one per file it mentions. */
+const MAX_LINKS = 3
 
 const TAG_COLORS = ['#e5a50a', '#3584e4', '#c061cb', '#2ec27e', '#e66100', '#1c9fb8', '#e01b24']
 
@@ -203,6 +211,24 @@ const saveLastReply = async ($: EngineInterface, text: string, where: Scope) => 
   return `📝 Saved Claude's last reply as a ${where === 'global' ? 'global' : 'project'} note: ${preview(reply)}`
 }
 
+/**
+ * Opens a file a note mentions in `editor`. A relative path is under the
+ * note's own folder: the session's, spelled as the host spells it, for this
+ * project's and the global notes. A failure is a toast.
+ */
+const openLink = async ($: EngineInterface, editor: Editor, note: Note, link: FileLink) => {
+  const here = await $.session.cwd()
+  const folder = isGlobal(note) || isHere(note, normalize(here)) ? here : note.project!
+  const argv = editorCommand(editor, resolvePath(link.path, folder), link)
+  const failed = (why: string) => $.ui.toast(`Couldn't open ${link.text} with ${argv[0]}: ${why}`)
+  try {
+    const { exitCode, stderr } = await $.process.run(argv, { timeoutMs: 15000 })
+    if (exitCode !== 0) failed(stderr.trim().split('\n')[0] || `exit code ${exitCode}`)
+  } catch (err) {
+    failed(err instanceof Error ? err.message : String(err))
+  }
+}
+
 const openPane = ($: EngineInterface) =>
   $.ui.open({ id: PANE, title: 'claudepad', focus: true })
 
@@ -279,7 +305,10 @@ const saveEditor = async ($: EngineInterface, text?: string) => {
   return session.id === 'new' ? '📝 Note added.' : '📝 Note saved.'
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  // The mod's `editor` option: which editor a note's file reference opens in.
+  const linkEditor: Editor = EDITORS.find(name => name === options.editor) ?? 'vscode'
+
   on('session.start', async ($, e, next) => {
     const project = await projectOf($)
     await update($, folder, () => project)
@@ -726,6 +755,13 @@ export const register: Register = on => {
           <Button key={`move-${note.id}`} plain dimColor onPress={() => move(note)}>
             {isGlobal(note) ? '→ project' : '→ global'}
           </Button>
+          {linksOf(note.text)
+            .slice(0, MAX_LINKS)
+            .map((link, i) => (
+              <Button key={`open-${note.id}-${i}`} plain dimColor onPress={() => openLink($, linkEditor, note, link)}>
+                {`open ${baseName(link.path.replace(/\\/g, '/'))}:${link.line}`}
+              </Button>
+            ))}
           <Button
             key={`del-${note.id}`}
             plain

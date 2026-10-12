@@ -31,6 +31,10 @@ mod's own store under your Claude Code config folder.
 - **Due dates.** Write `#due:2026-10-20` in a note. A session starts with a
   toast naming overdue notes, the status line counts them, and the pane
   shows the date red once it has passed (amber on the day).
+- **File links.** A `path:line` (or `path:line:column`) in a note, such as
+  `hooks/register.tsx:42`, gets an **open** button that opens the file at
+  that line in VS Code (`code -g`). The `editor` option switches to Cursor or
+  a JetBrains IDE (`idea`). A relative path is under the note's project.
 - **A multi-line editor.** A full editor with cursor keys and `Ctrl+S` to
   save, with a line-by-line fallback where the full one cannot draw.
 - **`NOTES.md` sync.** `/notes export [--force]` writes the project's notes

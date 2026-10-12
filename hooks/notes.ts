@@ -135,6 +135,52 @@ export const dueOf = (text: string) => {
   return date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? `${m[1]}-${m[2]}-${m[3]}` : undefined
 }
 
+/** A `path:line` (or `path:line:column`) a note mentions, as written. */
+export type FileLink = { path: string; line: number; column?: number; text: string }
+
+/**
+ * A file reference: a path whose last part has an extension, then `:line`
+ * and maybe `:column`, standing alone (after a space or an opening bracket or
+ * quote, before a space or punctuation). A drive letter is allowed.
+ */
+const LINK = /(^|[\s([`'"])((?:[A-Za-z]:)?[\w.~/\\-]*[\w~]\.[A-Za-z0-9]+):(\d+)(?::(\d+))?(?=$|[\s)\]`'",.;!?])/g
+
+/** The file references in a note's text, in order. */
+export const linksOf = (text: string): FileLink[] =>
+  [...text.matchAll(LINK)].map(m => ({
+    path: m[2]!,
+    line: Number(m[3]),
+    ...(m[4] === undefined ? {} : { column: Number(m[4]) }),
+    text: m[0].slice(m[1]!.length),
+  }))
+
+/** `path` as an absolute path: as it is when absolute, else under `folder`. */
+export const resolvePath = (path: string, folder: string) =>
+  /^([A-Za-z]:[\\/]|[\\/])/.test(path) ? path : `${folder.replace(/[\\/]+$/, '')}/${path.replace(/^\.[\\/]/, '')}`
+
+/** The editors a link can open in; the mod's `editor` option picks one. */
+export const EDITORS = ['vscode', 'cursor', 'jetbrains'] as const
+export type Editor = (typeof EDITORS)[number]
+
+/** The command that opens `path` at the link's line (and column) in `editor`. */
+export const editorCommand = (editor: Editor, path: string, link: Pick<FileLink, 'line' | 'column'>) => {
+  const at = `${path}:${link.line}${link.column === undefined ? '' : `:${link.column}`}`
+  switch (editor) {
+    case 'vscode':
+      return ['code', '-g', at]
+    case 'cursor':
+      return ['cursor', '-g', at]
+    case 'jetbrains':
+      return [
+        'idea',
+        '--line',
+        String(link.line),
+        ...(link.column === undefined ? [] : ['--column', String(link.column)]),
+        path,
+      ]
+  }
+}
+
 /** The date at `ms` on the local calendar, as YYYY-MM-DD, which compares as text. */
 export const localDate = (ms: number) => {
   const date = new Date(ms)

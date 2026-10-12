@@ -8,5 +8,14 @@
   "repository": "https://github.com/nwilsson/claudepad",
   "license": "MIT",
   "keywords": ["claude-code", "mod", "notes", "notepad", "todo", "productivity"],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "editor": {
+      "type": "string",
+      "title": "Editor for note links",
+      "description": "The editor a note's path:line opens in: vscode (code -g), cursor (cursor -g) or jetbrains (idea --line).",
+      "default": "vscode",
+      "options": ["vscode", "cursor", "jetbrains"]
+    }
+  }
 }
