@@ -178,12 +178,21 @@ export const exportOrder = (list: readonly Note[]) =>
       a.createdAt - b.createdAt,
   )
 
-/** `/note -g text` or `/note --global text` adds a global note. */
-export const parseNoteArgs = (args: string): { text: string; where: Scope } => {
-  const match = /^\s*(-g|--global)\s+/.exec(args)
-  return match
-    ? { text: args.slice(match[0].length).trim(), where: 'global' }
-    : { text: args.trim(), where: 'project' }
+/**
+ * `/note [-g | --global] [--last] [text]`, flags in any order before the
+ * text: -g makes a global note, --last saves Claude's last reply (with the
+ * text, if any, as its first line).
+ */
+export const parseNoteArgs = (args: string): { text: string; where: Scope; isLast: boolean } => {
+  let rest = args
+  let where: Scope = 'project'
+  let isLast = false
+  for (let flag = /^\s*(-g|--global|--last)(?=\s|$)/.exec(rest); flag; flag = /^\s*(-g|--global|--last)(?=\s|$)/.exec(rest)) {
+    if (flag[1] === '--last') isLast = true
+    else where = 'global'
+    rest = rest.slice(flag[0].length)
+  }
+  return { text: rest.trim(), where, isLast }
 }
 
 /** One line per note (more for a multi-line one), each ending in its id when `withIds`. */

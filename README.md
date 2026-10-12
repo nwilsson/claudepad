@@ -15,7 +15,9 @@ mod's own store under your Claude Code config folder.
 
 - **A pane, one command away.** `/notes` opens or closes it. `/note <text>`
   adds a quick note, `/note -g <text>` a global one, and a bare `/note`
-  opens the multi-line editor.
+  opens the multi-line editor. `/note --last [text]` saves Claude's last
+  reply as a note (your text, such as tags, as its first line); the pane
+  has a button for it too.
 - **Per-project and global notes.** Project notes are tied to the session's
   folder, so each repo keeps its own list. Global notes follow you
   everywhere.

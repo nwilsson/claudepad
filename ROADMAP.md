@@ -50,7 +50,8 @@ or more).
 - [x] Due dates via a `#due:YYYY-MM-DD` tag, with overdue notes surfaced at `session.start`.
   - `dueOf()` reads a real date only (`#due:2026-02-30` is none); dates compare on the local calendar. Open overdue notes here and global get a toast at `session.start` (up to three named) and a `⏰ N overdue` count on the status line, kept on every change. The pane draws the date red once past, amber on the day. `#due` stays an ordinary tag, so the tag bar filters every dated note.
   - Not done: sorting by due date, and telling Claude which notes are overdue (`list_notes` shows the dates as written).
-- [ ] "Save last response as note."
+- [x] "Save last response as note."
+  - `/note --last [text]` (with `-g` for global, flags in any order before the text) and a pane button save the main conversation's last assistant message with text, read from `$.session.messages()` when asked, so it works after a reload too. Any text becomes the first line. The note is yours (`author: 'you'`): you chose to save it. A long reply is saved whole.
 - [ ] Notes can carry a `path:line` link that opens the file.
 
 ## Phase 4: sync and workflow (M–L)

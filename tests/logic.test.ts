@@ -150,8 +150,12 @@ test('status counts open notes here and global, and is empty with none', () => {
 
 test('small helpers: folder spelling, /note flags, previews', () => {
   expect(normalize('E:\\Code\\Demo\\')).toBe('e:/code/demo')
-  expect(parseNoteArgs('-g  milk ')).toEqual({ text: 'milk', where: 'global' })
-  expect(parseNoteArgs('-gx milk')).toEqual({ text: '-gx milk', where: 'project' })
+  expect(parseNoteArgs('-g  milk ')).toEqual({ text: 'milk', where: 'global', isLast: false })
+  expect(parseNoteArgs('-gx milk')).toEqual({ text: '-gx milk', where: 'project', isLast: false })
+  expect(parseNoteArgs('--last -g #idea')).toEqual({ text: '#idea', where: 'global', isLast: true })
+  expect(parseNoteArgs('-g --last')).toEqual({ text: '', where: 'global', isLast: true })
+  // Flags count only before the text.
+  expect(parseNoteArgs('see --last -g')).toEqual({ text: 'see --last -g', where: 'project', isLast: false })
   expect(preview('first\nsecond')).toBe('first')
   expect(preview('x'.repeat(61))).toBe(`${'x'.repeat(59)}…`)
 })

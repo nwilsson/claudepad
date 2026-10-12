@@ -191,6 +191,18 @@ const addNote = async ($: EngineInterface, text: string, author: Note['author'],
   return note
 }
 
+/**
+ * Saves Claude's last reply in the main conversation (its last message with
+ * text) as a note of yours, with `text`, if any, as the first line.
+ */
+const saveLastReply = async ($: EngineInterface, text: string, where: Scope) => {
+  const rows = await $.session.messages()
+  const reply = rows.findLast(row => row.role === 'assistant' && row.text.trim() !== '')?.text.trim()
+  if (reply === undefined) return 'No reply from Claude yet to save.'
+  await addNote($, text === '' ? reply : `${text}\n\n${reply}`, 'you', where)
+  return `📝 Saved Claude's last reply as a ${where === 'global' ? 'global' : 'project'} note: ${preview(reply)}`
+}
+
 const openPane = ($: EngineInterface) =>
   $.ui.open({ id: PANE, title: 'claudepad', focus: true })
 
@@ -290,8 +302,9 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'note',
-      description: 'Add a note for this project (-g for a global note, #words become tags)',
-      argumentHint: '[-g] <text>',
+      description:
+        "Add a note for this project (-g for a global note, #words become tags; --last saves Claude's last reply)",
+      argumentHint: '[-g] [--last] <text>',
       immediate: true,
     })
     await $.tool.register({
@@ -407,7 +420,10 @@ export const register: Register = on => {
 
   // /note <text> adds to this project; /note -g <text> adds a global note.
   on('command.run', { command: 'note' }, async ($, e) => {
-    const { text, where } = parseNoteArgs(e.args)
+    const { text, where, isLast } = parseNoteArgs(e.args)
+    if (isLast) {
+      return { text: await saveLastReply($, text, where) }
+    }
     if (text === '') {
       // A bare /note (or /note -g) opens the multi-line editor on a new note.
       await update($, scope, () => where)
@@ -765,6 +781,9 @@ export const register: Register = on => {
           </Button>
           <Button key="new-multiline" plain onPress={() => openEditor($, 'new', '')}>
             ✎ multi-line note
+          </Button>
+          <Button key="save-last" plain onPress={async () => $.ui.toast(await saveLastReply($, '', where))}>
+            ↓ Claude's last reply
           </Button>
         </Box>
 

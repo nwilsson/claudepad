@@ -331,3 +331,39 @@ test('complete_note and update_note refuse an unknown id or empty text', async (
   })
   expect(await listNotes($)).toContain('- [ ] one')
 })
+
+test("/note --last saves Claude's last reply, with any text as its first line", async ($, on) => {
+  setup(on)
+  let rows: { role: 'user' | 'assistant'; text: string; toolUses: never[] }[] = []
+  on('session.messages', () => ({ value: rows }))
+  expect(await run($, 'note', '--last')).toBe('No reply from Claude yet to save.')
+
+  rows = [
+    { role: 'user', text: 'how do I fix the login?', toolUses: [] },
+    { role: 'assistant', text: 'Let me look.', toolUses: [] },
+    { role: 'assistant', text: 'Clear the cookie, then\nretry the redirect.', toolUses: [] },
+    { role: 'assistant', text: '  ', toolUses: [] },
+    { role: 'user', text: 'thanks', toolUses: [] },
+  ]
+  expect(await run($, 'note', '--last')).toBe(
+    "📝 Saved Claude's last reply as a project note: Clear the cookie, then",
+  )
+  expect(await run($, 'note', '-g --last login fix #howto')).toBe(
+    "📝 Saved Claude's last reply as a global note: Clear the cookie, then",
+  )
+  expect(await listNotes($)).toBe(
+    [
+      'Notes for this project (demo):',
+      '- [ ] Clear the cookie, then',
+      '      retry the redirect.',
+      '',
+      'Global notes:',
+      '- [ ] login fix #howto',
+      '      ',
+      '      Clear the cookie, then',
+      '      retry the redirect.',
+      '',
+      'Tags in use: #howto (1)',
+    ].join('\n'),
+  )
+})
