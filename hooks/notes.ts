@@ -152,16 +152,22 @@ export const parseNoteArgs = (args: string): { text: string; where: Scope } => {
     : { text: args.trim(), where: 'project' }
 }
 
-const lines = (list: readonly Note[]) =>
+/** One line per note (more for a multi-line one), each ending in its id when `withIds`. */
+const lines = (list: readonly Note[], withIds: boolean) =>
   list
     .map(
       note =>
-        `- [${note.isDone ? 'x' : ' '}]${note.isPinned ? ' (pinned)' : ''} ${indented(note.text, '      ')}`,
+        `- [${note.isDone ? 'x' : ' '}]${note.isPinned ? ' (pinned)' : ''} ${indented(note.text, '      ')}` +
+        (withIds ? ` (id: ${note.id})` : ''),
     )
     .join('\n')
 
-/** The notes as /notes find and list_notes give them: this project's and global, or a search over all. */
-export const asText = (list: readonly Note[], project: string, search = '') => {
+/**
+ * The notes as /notes find and list_notes give them: this project's and
+ * global, or a search over all. `withIds` (for Claude's tools) adds each
+ * note's id, which complete_note and update_note take.
+ */
+export const asText = (list: readonly Note[], project: string, search = '', withIds = false) => {
   if (search.trim() !== '') {
     // Oldest first, whatever order the store keys hold the projects in.
     const found = list.filter(note => matches(note, search)).sort((a, b) => a.createdAt - b.createdAt)
@@ -171,7 +177,7 @@ export const asText = (list: readonly Note[], project: string, search = '') => {
           found
             .map(note => {
               const where = isGlobal(note) ? 'global' : isHere(note, project) ? 'this project' : baseName(note.project ?? '')
-              return `${lines([note])} (${where})`
+              return `${lines([note], withIds)} (${where})`
             })
             .join('\n')
   }
@@ -179,10 +185,10 @@ export const asText = (list: readonly Note[], project: string, search = '') => {
   const global = list.filter(isGlobal)
   return [
     `Notes for this project (${baseName(project)}):`,
-    here.length ? lines(here) : '(none)',
+    here.length ? lines(here, withIds) : '(none)',
     '',
     'Global notes:',
-    global.length ? lines(global) : '(none)',
+    global.length ? lines(global, withIds) : '(none)',
     '',
     `Tags in use: ${tagCounts(list).map(([tag, n]) => `#${tag} (${n})`).join(', ') || '(none)'}`,
   ].join('\n')

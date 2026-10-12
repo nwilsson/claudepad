@@ -37,6 +37,8 @@ import {
 const PANE = 'claudepad'
 const ADD_TOOL = 'mcp__claudepad__add_note'
 const LIST_TOOL = 'mcp__claudepad__list_notes'
+const COMPLETE_TOOL = 'mcp__claudepad__complete_note'
+const UPDATE_TOOL = 'mcp__claudepad__update_note'
 
 const notes = atom({ plugin: 'claudepad', key: 'notes' } as const, [] as Note[])
 const editor = atom({ plugin: 'claudepad', key: 'editor' } as const, null as EditorSession | null)
@@ -124,11 +126,15 @@ const change = async ($: EngineInterface, keys: readonly string[], fn: (list: No
   return written
 }
 
-/** Changes one note, under the key this session last saw it in. */
+/**
+ * Changes one note, under the key this session last saw it in; resolves to the
+ * note as written, or undefined when there is no such note (any longer).
+ */
 const changeNote = async ($: EngineInterface, id: string, fn: (note: Note) => Note) => {
   const seen = (await read($, notes)).find(note => note.id === id)
-  if (!seen) return
-  await change($, [keyOf(seen)], all => all.map(note => (note.id === id ? fn(note) : note)))
+  if (!seen) return undefined
+  const written = await change($, [keyOf(seen)], all => all.map(note => (note.id === id ? fn(note) : note)))
+  return written.find(note => note.id === id)
 }
 
 /**
@@ -296,7 +302,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'list_notes',
       description:
-        "List the notes in the user's notepad: this project's notes and the global ones, with whether each is done or pinned. With `query`, search every note (all projects) for notes containing all of its words; a #word in the query matches that tag exactly. Also lists the tags in use.",
+        "List the notes in the user's notepad: this project's notes and the global ones, with whether each is done or pinned, and each note's id (for complete_note and update_note). With `query`, search every note (all projects) for notes containing all of its words; a #word in the query matches that tag exactly. Also lists the tags in use.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -305,6 +311,32 @@ export const register: Register = on => {
             description: 'Optional words to search for, case-insensitive; #tag matches a tag (e.g. "#bug login").',
           },
         },
+      },
+    })
+    await $.tool.register({
+      name: 'complete_note',
+      description:
+        "Mark a note in the user's notepad done, for example a TODO you have just finished, or (with `done: false`) open again. Take the id from list_notes or add_note. Only mark a note done when the work it describes is actually finished.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: "The note's id, as list_notes shows it." },
+          done: { type: 'boolean', description: 'False to reopen a done note. Default true.' },
+        },
+        required: ['id'],
+      },
+    })
+    await $.tool.register({
+      name: 'update_note',
+      description:
+        "Replace the text of a note in the user's notepad, for example to record progress or correct it. Take the id from list_notes or add_note. Keep the note's #tags unless they no longer apply.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: "The note's id, as list_notes shows it." },
+          text: { type: 'string', description: 'The new text, with any #tags inline.' },
+        },
+        required: ['id', 'text'],
       },
     })
 
@@ -400,16 +432,44 @@ export const register: Register = on => {
       return { deny: 'add_note needs non-empty text.' }
     }
     const where: Scope = input.global === true ? 'global' : 'project'
-    await addNote($, text, 'claude', where)
+    const note = await addNote($, text, 'claude', where)
     $.ui.toast(`📝 Claude added a ${where === 'global' ? 'global' : 'project'} note: ${text.slice(0, 60)}`)
-    return { result: `Added to the notepad (${where}): ${text}` }
+    return { result: `Added to the notepad (${where}): ${text} (id: ${note.id})` }
   })
 
   on('tool.call', { tool: LIST_TOOL }, async ($, e) => {
     const search = (e as unknown as { query?: unknown }).query
     return {
-      result: asText(await read($, notes), await projectOf($), typeof search === 'string' ? search : ''),
+      result: asText(await read($, notes), await projectOf($), typeof search === 'string' ? search : '', true),
     }
+  })
+
+  on('tool.call', { tool: COMPLETE_TOOL }, async ($, e) => {
+    const input = e as unknown as { id?: unknown; done?: unknown }
+    const id = String(input.id ?? '').trim()
+    const isDone = input.done !== false
+    const note = await changeNote($, id, found => ({ ...found, isDone }))
+    if (!note) {
+      return { deny: `No note with id "${id}". list_notes shows each note's id.` }
+    }
+    const what = isDone ? 'done' : 'open again'
+    $.ui.toast(`📝 Claude marked a note ${what}: ${preview(note.text)}`)
+    return { result: `Marked ${what}: ${preview(note.text)}` }
+  })
+
+  on('tool.call', { tool: UPDATE_TOOL }, async ($, e) => {
+    const input = e as unknown as { id?: unknown; text?: unknown }
+    const id = String(input.id ?? '').trim()
+    const text = String(input.text ?? '').trim()
+    if (text === '') {
+      return { deny: 'update_note needs non-empty text.' }
+    }
+    const note = await changeNote($, id, found => tagged({ ...found, text }))
+    if (!note) {
+      return { deny: `No note with id "${id}". list_notes shows each note's id.` }
+    }
+    $.ui.toast(`📝 Claude updated a note: ${preview(note.text)}`)
+    return { result: `Updated the note (id: ${note.id}): ${note.text}` }
   })
 
   // The editor surface module posts its text as it changes, and on Ctrl+S.

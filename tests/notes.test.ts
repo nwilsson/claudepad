@@ -37,7 +37,10 @@ const run = async ($: Engine, command: string, args = '') =>
     })
   ).text ?? ''
 
-const listNotes = async ($: Engine, query?: string) =>
+/** list_notes' text with the random note ids taken out; idOf reads one. */
+const listNotes = async ($: Engine, query?: string) => (await listRaw($, query)).replace(/ \(id: [^)]+\)/g, '')
+
+const listRaw = async ($: Engine, query?: string) =>
   String(
     (
       (await $.tool.call({ tool: 'mcp__claudepad__list_notes', ...(query === undefined ? {} : { query }) })) as {
@@ -45,6 +48,12 @@ const listNotes = async ($: Engine, query?: string) =>
       }
     ).result,
   )
+
+/** The id list_notes gives the note whose first line is `text`. */
+const idOf = async ($: Engine, text: string) => {
+  const line = (await listRaw($)).split('\n').find(l => l.includes(`] ${text} (id: `))
+  return /\(id: ([^)]+)\)$/.exec(line ?? '')?.[1]
+}
 
 test('/note adds to this project, -g and --global to the global list', async ($, on) => {
   setup(on)
@@ -281,4 +290,44 @@ test('pinned open notes for this project and global ride along with a prompt', a
       '- here (this project)\n' +
       '- everywhere\n  two lines',
   ])
+})
+
+test('Claude can mark a note done or open again, and rewrite it, by its id', async ($, on) => {
+  setup(on)
+  const added = (await $.tool.call({ tool: 'mcp__claudepad__add_note', text: 'fix login #todo' })) as {
+    result?: unknown
+  }
+  const id = await idOf($, 'fix login #todo')
+  expect(added.result).toBe(`Added to the notepad (project): fix login #todo (id: ${id})`)
+
+  expect(await $.tool.call({ tool: 'mcp__claudepad__complete_note', id })).toEqual({
+    result: 'Marked done: fix login #todo',
+  })
+  expect(await listNotes($)).toContain('- [x] fix login #todo')
+  expect(await $.tool.call({ tool: 'mcp__claudepad__complete_note', id, done: false })).toEqual({
+    result: 'Marked open again: fix login #todo',
+  })
+  expect(await listNotes($)).toContain('- [ ] fix login #todo')
+
+  // A new text brings new tags.
+  expect(await $.tool.call({ tool: 'mcp__claudepad__update_note', id, text: 'fix login, half done #wip' })).toEqual({
+    result: `Updated the note (id: ${id}): fix login, half done #wip`,
+  })
+  expect(await run($, 'notes', 'tags')).toBe('Tags: #wip (1)')
+})
+
+test('complete_note and update_note refuse an unknown id or empty text', async ($, on) => {
+  setup(on)
+  await run($, 'note', 'one')
+  const id = await idOf($, 'one')
+  expect(await $.tool.call({ tool: 'mcp__claudepad__complete_note', id: 'nope' })).toEqual({
+    deny: `No note with id "nope". list_notes shows each note's id.`,
+  })
+  expect(await $.tool.call({ tool: 'mcp__claudepad__update_note', id: 'nope', text: 'x' })).toEqual({
+    deny: `No note with id "nope". list_notes shows each note's id.`,
+  })
+  expect(await $.tool.call({ tool: 'mcp__claudepad__update_note', id, text: '  ' })).toEqual({
+    deny: 'update_note needs non-empty text.',
+  })
+  expect(await listNotes($)).toContain('- [ ] one')
 })

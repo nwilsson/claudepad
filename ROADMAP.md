@@ -45,7 +45,8 @@ or more).
 
 ## Phase 3: Claude-aware features (M)
 
-- [ ] `complete_note` and `update_note` tools, so Claude can close the TODOs it finishes.
+- [x] `complete_note` and `update_note` tools, so Claude can close the TODOs it finishes.
+  - Both take a note's id, which `list_notes` and `add_note` now report (`/notes find`, for the person, does not). `complete_note` takes `done: false` to reopen; `update_note` replaces the text and its tags. An unknown id or empty text is refused, and every change shows a toast.
 - [ ] Due dates via a `#due:YYYY-MM-DD` tag, with overdue notes surfaced at `session.start`.
 - [ ] "Save last response as note."
 - [ ] Notes can carry a `path:line` link that opens the file.

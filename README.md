@@ -37,6 +37,8 @@ mod's own store under your Claude Code config folder.
   - **→ prompt** puts a note into the prompt box.
   - Claude gets `add_note` and `list_notes` tools, so it can park a
     follow-up instead of derailing the task, and look up what you wrote.
+    With `complete_note` and `update_note` it can tick off a TODO it has
+    finished or record progress on one. Each change shows a toast.
 
 ## Install
 

@@ -19,7 +19,7 @@ const listed = async ($: Engine) =>
   String(((await $.tool.call({ tool: 'mcp__claudepad__list_notes' })) as { result?: unknown }).result)
     .split('\n')
     .filter(line => line.startsWith('- [ ] '))
-    .map(line => line.slice('- [ ] '.length))
+    .map(line => line.slice('- [ ] '.length).replace(/ \(id: [^)]+\)$/, ''))
 
 const undoNotes = async ($: Engine) =>
   (
