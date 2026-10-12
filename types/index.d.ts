@@ -8,6 +8,11 @@ export type Note = {
   author: 'you' | 'claude'
   createdAt: number
   /**
+   * The note's tags, lowercased, without the `#`, stored whenever its text is
+   * written. Notes saved before tags were stored have none until loaded.
+   */
+  tags?: string[]
+  /**
    * The project folder the note belongs to (normalized path), or null for a
    * global note. Notes saved before projects existed have none: global.
    */

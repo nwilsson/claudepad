@@ -1,4 +1,4 @@
-import { atom, read, update } from 'claude-code'
+import { atom, derive, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { DeletedNote, EditorSession, Note, Scope } from '../types'
@@ -22,7 +22,8 @@ import {
   preview,
   statusFor,
   tagCounts,
-  tagsOf,
+  tagged,
+  tagsOfNote,
   toMarkdown,
 } from './notes'
 
@@ -44,6 +45,9 @@ const query = atom({ plugin: 'claudepad', key: 'query' } as const, '')
 const activeTag = atom({ plugin: 'claudepad', key: 'tag' } as const, null as string | null)
 const deleted = atom({ plugin: 'claudepad', key: 'deleted' } as const, null as DeletedNote | null)
 
+/** Open pinned notes in every project, worked out again only when the notes change. */
+const pinned = derive([notes], list => list.filter(note => note.isPinned && !note.isDone))
+
 /** How long the pane offers to undo a delete. */
 const UNDO_MS = 5000
 
@@ -58,7 +62,9 @@ const colorOf = (tag: string) => {
 
 const projectOf = async ($: EngineInterface) => normalize(await $.session.cwd())
 
-const fromStore = (saved: unknown) => (Array.isArray(saved) ? (saved as Note[]) : [])
+/** The saved notes, each with its tags (a note saved before tags were stored gets them here). */
+const fromStore = (saved: unknown) =>
+  Array.isArray(saved) ? (saved as Note[]).map(note => (note.tags ? note : tagged(note))) : []
 
 /**
  * Changes the notes, keeps them on disk, and refreshes the status line. Every
@@ -109,7 +115,7 @@ const undoDelete = async ($: EngineInterface) => {
 }
 
 const addNote = async ($: EngineInterface, text: string, author: Note['author'], where: Scope) => {
-  const note: Note = {
+  const note = tagged({
     id: newId(),
     text: text.trim(),
     isDone: false,
@@ -117,7 +123,7 @@ const addNote = async ($: EngineInterface, text: string, author: Note['author'],
     author,
     createdAt: Date.now(),
     project: where === 'global' ? null : await projectOf($),
-  }
+  })
   await change($, list => [...list, note])
   return note
 }
@@ -192,7 +198,7 @@ const saveEditor = async ($: EngineInterface, text?: string) => {
   if (session.id === 'new') {
     await addNote($, body, 'you', await read($, scope))
   } else {
-    await change($, all => all.map(note => (note.id === session.id ? { ...note, text: body } : note)))
+    await change($, all => all.map(note => (note.id === session.id ? tagged({ ...note, text: body }) : note)))
   }
   await closeEditor($)
   return session.id === 'new' ? '📝 Note added.' : '📝 Note saved.'
@@ -320,15 +326,13 @@ export const register: Register = on => {
   // Claude-aware: pinned notes (this project's and global) ride along with every prompt.
   on('prompt.submit', async ($, e, next) => {
     const project = await projectOf($)
-    const pinned = (await read($, notes)).filter(
-      note => note.isPinned && !note.isDone && (isGlobal(note) || isHere(note, project)),
-    )
-    if (pinned.length === 0) {
+    const shown = (await read($, pinned)).filter(note => isGlobal(note) || isHere(note, project))
+    if (shown.length === 0) {
       return next(e)
     }
     const block =
       "The user's pinned notes from their notepad (standing context; keep them in mind):\n" +
-      pinned
+      shown
         .map(note => `- ${indented(note.text, '  ')}${isGlobal(note) ? '' : ' (this project)'}`)
         .join('\n')
     return next({ ...e, context: [...(e.context ?? []), block] })
@@ -498,7 +502,7 @@ export const register: Register = on => {
     const undo = await read($, deleted)
     const isSearching = search !== '' || tag !== null
     const shown = (note: Note) =>
-      (search === '' || matches(note, search)) && (tag === null || tagsOf(note.text).includes(tag))
+      (search === '' || matches(note, search)) && (tag === null || tagsOfNote(note).includes(tag))
 
     const allHere = list.filter(note => isHere(note, project))
     const allGlobal = list.filter(isGlobal)

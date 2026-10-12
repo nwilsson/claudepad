@@ -54,3 +54,21 @@ test('a change keeps notes another session added after this one started', async 
   await $.tool.call({ tool: 'mcp__claudepad__add_note', text: 'a3' })
   expect((stored.notes as { text: string }[]).map(n => n.text)).toEqual(['a1', 'a2', 'a3'])
 })
+
+test('saved notes carry their tags, old ones from their next write on', async ($, on) => {
+  const stored: Record<string, unknown> = { notes: [note('old #Legacy', '/work/a')] }
+  on('store.get', (_$, e) => ({ value: stored[e.key] }))
+  on('store.set', (_$, e) => {
+    stored[e.key] = e.value
+    return { value: undefined }
+  })
+  on('session.cwd', () => ({ value: '/work/a' }))
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+
+  await $.tool.call({ tool: 'mcp__claudepad__add_note', text: 'new #One #two' })
+  expect((stored.notes as { text: string; tags?: string[] }[]).map(n => [n.text, n.tags])).toEqual([
+    ['old #Legacy', ['legacy']],
+    ['new #One #two', ['one', 'two']],
+  ])
+})

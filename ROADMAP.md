@@ -31,10 +31,13 @@ or more).
 
 - [x] Extract `parseMarkdown`, `matches`, `tagsOf`, the import merge, and the sort into `hooks/notes.ts` with no UI imports. This also shrinks `hooks/register.tsx`.
   - `hooks/notes.ts` also holds the text and Markdown formats, the status text and the small helpers; `register.tsx` went from 891 to about 740 lines. The import merge is `mergeImport`, which returns the list and its counts. `tests/logic.test.ts` tests the module directly. Import it as `./notes`: tsc refuses a `.ts` extension.
-- [ ] Store tags on each note at write time instead of re-parsing on every render.
-- [ ] Post the editor draft on save, mode switch, or a 300 ms debounce, not on every keystroke.
-- [ ] Replace the O(n·m) `findIndex` in import with a key `Map`.
-- [ ] Keep a derived `pinned` atom so `prompt.submit` skips the full scan.
+- [x] Store tags on each note at write time instead of re-parsing on every render.
+  - `Note.tags`, set by `tagged()` wherever text is written (add, edit, import). A note saved before this gets its tags when loaded, and keeps them from its next write on. Search, tag counts and the pane's tag filter read `tagsOfNote()`, which falls back to the text.
+- ~~Post the editor draft on save, mode switch, or a 300 ms debounce, not on every keystroke.~~ **Dropped, not worth doing.** The engine already sends at most one post per frame, and in full-editor mode the pane does not read the draft, so a post redraws nothing. A debounce would make the pane's **Save** button miss up to 300 ms of typing, because the hooks module cannot ask the editor for its text (Ctrl+S posts it directly).
+- [x] Replace the O(n·m) `findIndex` in import with a key `Map`.
+  - Keyed by scope and loose text; the first of two alike notes wins, and a line the file repeats merges into the note it added, as the scan did.
+- [x] Keep a derived `pinned` atom so `prompt.submit` skips the full scan.
+  - `derive([notes], …)` keeps the open pinned notes of every project and recomputes only when the notes change; `prompt.submit` filters that short list to this project and global.
 - [ ] Write per-project store keys, or one document per note, so writes are proportional to the change.
 
 ## Phase 3: Claude-aware features (M)

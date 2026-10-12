@@ -9,11 +9,17 @@ export const TAG = /(^|\s)#([\p{L}\p{N}_-]+)/gu
 /** The note's tags, lowercased, each once, without the `#`. */
 export const tagsOf = (text: string) => [...new Set([...text.matchAll(TAG)].map(m => m[2]!.toLowerCase()))]
 
+/** The note with its tags stored; call it whenever the text is written. */
+export const tagged = (note: Note): Note => ({ ...note, tags: tagsOf(note.text) })
+
+/** The note's stored tags, or its text's for a note saved before tags were stored. */
+export const tagsOfNote = (note: Note) => note.tags ?? tagsOf(note.text)
+
 /** Each tag in `list` with how many notes carry it, most used first. */
 export const tagCounts = (list: readonly Note[]) => {
   const counts = new Map<string, number>()
   for (const note of list) {
-    for (const tag of tagsOf(note.text)) counts.set(tag, (counts.get(tag) ?? 0) + 1)
+    for (const tag of tagsOfNote(note)) counts.set(tag, (counts.get(tag) ?? 0) + 1)
   }
   return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 }
@@ -24,7 +30,7 @@ export const tagCounts = (list: readonly Note[]) => {
  */
 export const matches = (note: Note, text: string) => {
   const haystack = note.text.toLowerCase()
-  const tags = tagsOf(note.text)
+  const tags = tagsOfNote(note)
   return text
     .toLowerCase()
     .split(/\s+/)
@@ -216,9 +222,11 @@ export const parseMarkdown = (markdown: string): ParsedNote[] => {
   return found.map(note => ({ ...note, text: note.text.trimEnd() }))
 }
 
-/** Text compared loosely, so spacing and case changes still match a note. */
-export const sameText = (a: string, b: string) =>
-  a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase()
+/** Text as import compares it, so spacing and case changes still match a note. */
+const looseText = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase()
+
+/** A note's scope and loose text, as one key; loose text never holds a newline. */
+const importKey = (where: Scope, text: string) => `${where}\n${looseText(text)}`
 
 /**
  * The notes after importing `parsed` into `project`. By default it merges: a
@@ -234,30 +242,42 @@ export const mergeImport = (
   replace: boolean,
   now: number,
 ) => {
-  const inScope = (note: Note, where: Scope) => (where === 'global' ? isGlobal(note) : isHere(note, project))
   const kept = replace ? all.filter(note => !(isGlobal(note) || isHere(note, project))) : all
   const list = [...kept]
+  // Where each of this project's and the global notes stands, by key; the
+  // first of two alike wins. A note the file adds joins it, so a line the
+  // file repeats matches that note.
+  const at = new Map<string, number>()
+  list.forEach((note, i) => {
+    const where: Scope | null = isGlobal(note) ? 'global' : isHere(note, project) ? 'project' : null
+    const key = where && importKey(where, note.text)
+    if (key && !at.has(key)) at.set(key, i)
+  })
   let added = 0
   let updated = 0
   parsed.forEach((item, i) => {
-    const at = replace ? -1 : list.findIndex(note => inScope(note, item.where) && sameText(note.text, item.text))
-    const match = list[at]
-    if (match) {
+    const key = importKey(item.where, item.text)
+    const index = replace ? undefined : at.get(key)
+    const match = index === undefined ? undefined : list[index]
+    if (index !== undefined && match) {
       if (match.isDone !== item.isDone || match.isPinned !== item.isPinned) {
-        list[at] = { ...match, isDone: item.isDone, isPinned: item.isPinned }
+        list[index] = { ...match, isDone: item.isDone, isPinned: item.isPinned }
         updated += 1
       }
       return
     }
-    list.push({
-      id: newId(),
-      text: item.text,
-      isDone: item.isDone,
-      isPinned: item.isPinned,
-      author: item.author,
-      createdAt: now + i,
-      project: item.where === 'global' ? null : project,
-    })
+    at.set(key, list.length)
+    list.push(
+      tagged({
+        id: newId(),
+        text: item.text,
+        isDone: item.isDone,
+        isPinned: item.isPinned,
+        author: item.author,
+        createdAt: now + i,
+        project: item.where === 'global' ? null : project,
+      }),
+    )
     added += 1
   })
   return { list, added, updated, removed: all.length - kept.length }

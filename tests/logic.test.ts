@@ -7,8 +7,11 @@ import {
   paneOrder,
   parseMarkdown,
   parseNoteArgs,
+  matches,
   preview,
   statusFor,
+  tagCounts,
+  tagged,
   toMarkdown,
 } from '../hooks/notes'
 import type { Note } from '../types'
@@ -67,6 +70,36 @@ test('merge counts added, updated and removed, and dates new notes in file order
   const replaced = mergeImport(all, parsed, '/work/demo', true, 1000)
   expect([replaced.added, replaced.updated, replaced.removed]).toEqual([3, 0, 2])
   expect(replaced.list.map(n => n.text)).toEqual(['other', 'KEEP', 'new one', 'new two'])
+})
+
+test('tags are stored with a note, and read from the text when a note has none stored', () => {
+  expect(tagged(note('fix #Bug and #bug #ui-x')).tags).toEqual(['bug', 'ui-x'])
+  // Search and counts read the stored tags...
+  const stored = { ...note('plain text'), tags: ['kept'] }
+  expect(matches(stored, '#kept')).toBe(true)
+  // ...and fall back to the text for an old note.
+  const old = note('old #Legacy')
+  expect(old.tags).toBeUndefined()
+  expect(matches(old, '#legacy')).toBe(true)
+  expect(tagCounts([stored, old, tagged(note('again #legacy'))])).toEqual([
+    ['legacy', 2],
+    ['kept', 1],
+  ])
+})
+
+test('merge matches through its key map as a scan would: first alike wins, repeats merge', () => {
+  const all = [note('twin', { id: 'first' }), note('twin', { id: 'second' }), note('twin', { project: null })]
+  const parsed = parseMarkdown('- [x] Twin\n- new #Tag\n- NEW  #tag\n## Global\n- twin\n')
+  const merged = mergeImport(all, parsed, '/work/demo', false, 0)
+  expect([merged.added, merged.updated]).toEqual([1, 1])
+  expect(merged.list.map(n => [n.id === 'first' || n.id === 'second' ? n.id : n.text, n.isDone])).toEqual([
+    ['first', true],
+    ['second', false],
+    ['twin', false],
+    ['new #Tag', false],
+  ])
+  // A note the import adds carries its tags.
+  expect(merged.list[3]!.tags).toEqual(['tag'])
 })
 
 test('status counts open notes here and global, and is empty with none', () => {
