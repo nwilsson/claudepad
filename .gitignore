@@ -8,3 +8,6 @@ node_modules/
 
 # Laid by the engine on a live load
 .claude-plugin/types/
+
+# Exported by the mod; re-exporting replaces it
+NOTES.md
