@@ -1,7 +1,7 @@
 import { atom, derive, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { DeletedNote, EditorSession, Note, Scope } from '../types'
+import type { ArchiveUndo, EditorSession, Note, Scope } from '../types'
 import type { Editor, FileLink } from './notes'
 import {
   EDITORS,
@@ -12,15 +12,18 @@ import {
   TAG,
   asText,
   baseName,
+  doneByWeek,
   editorCommand,
   groupByKey,
   indented,
   isGlobal,
   isHere,
+  isArchived,
   isNotesKey,
   keyOf,
   keyOfProject,
   linksOf,
+  live,
   localDate,
   matches,
   mergeImport,
@@ -39,6 +42,8 @@ import {
   tagged,
   tagsOfNote,
   toMarkdown,
+  unarchived,
+  withDone,
 } from './notes'
 
 const PANE = 'claudepad'
@@ -58,12 +63,13 @@ const folder = atom({ plugin: 'claudepad', key: 'folder' } as const, '')
 const scope = atom({ plugin: 'claudepad', key: 'scope' } as const, 'project' as Scope)
 const query = atom({ plugin: 'claudepad', key: 'query' } as const, '')
 const activeTag = atom({ plugin: 'claudepad', key: 'tag' } as const, null as string | null)
-const deleted = atom({ plugin: 'claudepad', key: 'deleted' } as const, null as DeletedNote | null)
+const lastArchive = atom({ plugin: 'claudepad', key: 'lastArchive' } as const, null as ArchiveUndo | null)
+const isArchiveView = atom({ plugin: 'claudepad', key: 'isArchiveView' } as const, false)
 
 /** Open pinned notes in every project, worked out again only when the notes change. */
-const pinned = derive([notes], list => list.filter(note => note.isPinned && !note.isDone))
+const pinned = derive([notes], list => live(list).filter(note => note.isPinned && !note.isDone))
 
-/** How long the pane offers to undo a delete. */
+/** How long the pane offers to undo an archive. */
 const UNDO_MS = 5000
 
 /** The most open buttons one note gets, one per file it mentions. */
@@ -147,42 +153,48 @@ const changeNote = async ($: EngineInterface, id: string, fn: (note: Note) => No
   return written.find(note => note.id === id)
 }
 
+/** Changes the notes with these ids, across whichever keys they are under. */
+const changeNotes = async ($: EngineInterface, ids: readonly string[], fn: (note: Note) => Note) => {
+  const seen = (await read($, notes)).filter(note => ids.includes(note.id))
+  if (seen.length === 0) return []
+  const written = await change($, seen.map(keyOf), all => all.map(note => (ids.includes(note.id) ? fn(note) : note)))
+  return written.filter(note => ids.includes(note.id))
+}
+
 /**
- * Deletes a note and keeps it for undo: the pane offers an undo button for
- * UNDO_MS, and /notes undo puts it back until the next delete.
+ * Archives notes and keeps them for undo: the pane offers an undo button for
+ * UNDO_MS, and /notes undo restores them until the next archive. `label` says
+ * what was archived, for the toast and the pane.
  */
-const deleteNote = async ($: EngineInterface, id: string) => {
-  const seen = (await read($, notes)).find(note => note.id === id)
-  if (!seen) return
-  // `index` is the note's place among its key's notes.
-  let removed = null as Pick<DeletedNote, 'note' | 'index'> | null
-  await change($, [keyOf(seen)], all => {
-    const index = all.findIndex(note => note.id === id)
-    removed = index < 0 ? null : { note: all[index]!, index }
-    return index < 0 ? all : all.filter(note => note.id !== id)
-  })
-  if (!removed) return
-  const { note, index } = removed
-  const deleteId = newId()
-  await update($, deleted, () => ({ id: deleteId, note, index, isOffered: true }))
-  $.ui.toast(`🗑 Deleted: ${preview(note.text)} (undo in the pane, or /notes undo)`, { timeoutMs: UNDO_MS })
-  // Hides only this delete's button: a later one, even of the same note, has its own timer.
+const archiveNotes = async ($: EngineInterface, ids: readonly string[], label: string) => {
+  const now = Date.now()
+  const archived = await changeNotes($, ids, note => (isArchived(note) ? note : { ...note, archivedAt: now }))
+  if (archived.length === 0) return
+  const archiveId = newId()
+  const noteIds = archived.map(note => note.id)
+  await update($, lastArchive, () => ({ id: archiveId, noteIds, label, isOffered: true }))
+  $.ui.toast(`🗄 Archived: ${label} (undo in the pane, or /notes undo)`, { timeoutMs: UNDO_MS })
+  // Hides only this archive's button: a later one, even of the same note, has its own timer.
   $.clock.after(UNDO_MS, () => {
-    void update($, deleted, last => (last?.id === deleteId ? { ...last, isOffered: false } : last))
+    void update($, lastArchive, last => (last?.id === archiveId ? { ...last, isOffered: false } : last))
   })
 }
 
-/** Puts the last deleted note back where it stood. */
-const undoDelete = async ($: EngineInterface) => {
-  const last = await read($, deleted)
+/** Takes the last archive's notes out of the archive again. */
+const undoArchive = async ($: EngineInterface) => {
+  const last = await read($, lastArchive)
   if (!last) return 'Nothing to undo.'
-  await change($, [keyOf(last.note)], all =>
-    all.some(note => note.id === last.note.id)
-      ? all
-      : [...all.slice(0, last.index), last.note, ...all.slice(last.index)],
-  )
-  await update($, deleted, () => null)
-  return `📝 Restored: ${preview(last.note.text)}`
+  await changeNotes($, last.noteIds, unarchived)
+  await update($, lastArchive, () => null)
+  return `📝 Restored: ${last.label}`
+}
+
+/** Deletes an archived note for good: the only delete there is. */
+const purgeNote = async ($: EngineInterface, id: string) => {
+  const seen = (await read($, notes)).find(note => note.id === id)
+  if (!seen || !isArchived(seen)) return
+  await change($, [keyOf(seen)], all => all.filter(note => note.id !== id))
+  await update($, lastArchive, last => (last ? { ...last, noteIds: last.noteIds.filter(other => other !== id) } : last))
 }
 
 const addNote = async ($: EngineInterface, text: string, author: Note['author'], where: Scope) => {
@@ -326,7 +338,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'notes',
       description:
-        'Open or close the notepad pane; /notes find <text> searches, /notes tags lists tags, /notes export and /notes import sync NOTES.md, /notes undo restores the last deleted note',
+        'Open or close the notepad pane; /notes find <text> searches, /notes tags lists tags, /notes export and /notes import sync NOTES.md, /notes undo restores the last archived notes',
       argumentHint: '[find <text> | tags | export | import | undo]',
     })
     await $.command.register({
@@ -427,7 +439,7 @@ export const register: Register = (on, options) => {
       return { text: await importNotes($, replace) }
     }
     if (/^\s*undo\s*$/i.test(e.args)) {
-      return { text: await undoDelete($) }
+      return { text: await undoArchive($) }
     }
     if (/^\s*tags\s*$/i.test(e.args)) {
       const counts = tagCounts(await read($, notes))
@@ -504,7 +516,7 @@ export const register: Register = (on, options) => {
     const input = e as unknown as { id?: unknown; done?: unknown }
     const id = String(input.id ?? '').trim()
     const isDone = input.done !== false
-    const note = await changeNote($, id, found => ({ ...found, isDone }))
+    const note = await changeNote($, id, found => withDone(found, isDone, Date.now()))
     if (!note) {
       return { deny: `No note with id "${id}". list_notes shows each note's id.` }
     }
@@ -667,20 +679,91 @@ export const register: Register = (on, options) => {
       )
     }
 
+    const undo = await read($, lastArchive)
+    const undoLine = undo?.isOffered && (
+      <Box marginTop={1} gap={1}>
+        <Text dimColor>🗄 Archived: {undo.label}</Text>
+        <Button key="undo-archive" plain onPress={async () => $.ui.toast(await undoArchive($))}>
+          undo
+        </Button>
+      </Box>
+    )
+    // This project's and the global notes, archived ones included.
+    const scoped = list.filter(note => isGlobal(note) || isHere(note, project))
+
+    if (await read($, isArchiveView)) {
+      const weeks = doneByWeek(scoped)
+      const shelved = paneOrder(scoped.filter(note => isArchived(note) && !note.isDone))
+      const archiveRow = (note: Note) => (
+        <Box key={`arow-${note.id}`} gap={1}>
+          <Text dimColor={isArchived(note)}>
+            {`${note.isDone ? '☑' : '☐'} ${preview(note.text)}${isGlobal(note) ? ' (global)' : ''}${isArchived(note) ? ' · archived' : ''}`}
+          </Text>
+          {isArchived(note)
+            ? [
+                <Button key={`restore-${note.id}`} plain dimColor onPress={() => changeNotes($, [note.id], unarchived)}>
+                  restore
+                </Button>,
+                <Button key={`purge-${note.id}`} plain dimColor onPress={() => purgeNote($, note.id)}>
+                  delete for good
+                </Button>,
+              ]
+            : [
+                <Button
+                  key={`archive-${note.id}`}
+                  plain
+                  dimColor
+                  onPress={() => archiveNotes($, [note.id], preview(note.text))}
+                >
+                  archive
+                </Button>,
+              ]}
+        </Box>
+      )
+      return (
+        <Box flexDirection="column">
+          <Box gap={2}>
+            <Text bold>🗄 Archive: {baseName(project)} and global</Text>
+            <Button key="archive-back" plain onPress={() => update($, isArchiveView, () => false)}>
+              ← back to notes
+            </Button>
+          </Box>
+          {undoLine}
+          {weeks.length === 0 && shelved.length === 0 && <Text dimColor>Nothing done or archived yet.</Text>}
+          {weeks.map(([week, done]) => (
+            <Box key={`week-${week ?? 'earlier'}`} flexDirection="column" marginTop={1}>
+              <Box>
+                <Text bold>{week === null ? 'Earlier' : `Week of ${week}`}</Text>
+                <Text dimColor> ({plural(done.length, 'note')} done)</Text>
+              </Box>
+              {done.map(archiveRow)}
+            </Box>
+          ))}
+          {shelved.length > 0 && (
+            <Box marginTop={1}>
+              <Text bold>Archived, not done</Text>
+            </Box>
+          )}
+          {shelved.map(archiveRow)}
+        </Box>
+      )
+    }
+
     const search = (await read($, query)).trim()
     const tag = await read($, activeTag)
-    const undo = await read($, deleted)
     const isSearching = search !== '' || tag !== null
     const shown = (note: Note) =>
       (search === '' || matches(note, search)) && (tag === null || tagsOfNote(note).includes(tag))
 
-    const allHere = list.filter(note => isHere(note, project))
-    const allGlobal = list.filter(isGlobal)
+    // The lists show live notes; archived ones are in the archive view.
+    const current = live(list)
+    const allHere = current.filter(note => isHere(note, project))
+    const allGlobal = current.filter(isGlobal)
     const here = paneOrder(allHere.filter(shown))
     const global = paneOrder(allGlobal.filter(shown))
     // Only while searching: matches from every other project too.
     const elsewhere = isSearching
-      ? paneOrder(list.filter(note => !isGlobal(note) && !isHere(note, project) && shown(note)))
+      ? paneOrder(current.filter(note => !isGlobal(note) && !isHere(note, project) && shown(note)))
       : []
 
     const submit = async (value: string) => {
@@ -691,7 +774,9 @@ export const register: Register = (on, options) => {
     }
 
     const toggle = (id: string, field: 'isDone' | 'isPinned') =>
-      changeNote($, id, note => ({ ...note, [field]: !note[field] }))
+      changeNote($, id, note =>
+        field === 'isDone' ? withDone(note, !note.isDone, Date.now()) : { ...note, isPinned: !note.isPinned },
+      )
 
     // A global note moves to this project; any other to global. The change spans both keys.
     const move = (moved: Note) => {
@@ -763,12 +848,12 @@ export const register: Register = (on, options) => {
               </Button>
             ))}
           <Button
-            key={`del-${note.id}`}
+            key={`archive-${note.id}`}
             plain
             dimColor
-            onPress={() => deleteNote($, note.id)}
+            onPress={() => archiveNotes($, [note.id], preview(note.text))}
           >
-            delete
+            archive
           </Button>
         </Box>
       </Box>
@@ -863,14 +948,7 @@ export const register: Register = (on, options) => {
           </Box>
         )}
 
-        {undo?.isOffered && (
-          <Box marginTop={1} gap={1}>
-            <Text dimColor>🗑 Deleted: {preview(undo.note.text)}</Text>
-            <Button key="undo-delete" plain onPress={async () => $.ui.toast(await undoDelete($))}>
-              undo
-            </Button>
-          </Box>
-        )}
+        {undoLine}
 
         <Box marginTop={1}>
           <Text bold>📁 {baseName(project)}</Text>
@@ -920,13 +998,17 @@ export const register: Register = (on, options) => {
               key="clear-done"
               plain
               dimColor
-              onPress={() =>
-                change($, [keyOfProject(project), GLOBAL_KEY], all => all.filter(note => !note.isDone))
-              }
+              onPress={() => {
+                const done = [...allHere, ...allGlobal].filter(note => note.isDone)
+                return archiveNotes($, done.map(note => note.id), plural(done.length, 'done note'))
+              }}
             >
               clear done
             </Button>
           )}
+          <Button key="archive-view" plain dimColor onPress={() => update($, isArchiveView, () => true)}>
+            {`🗄 archive (${scoped.filter(isArchived).length})`}
+          </Button>
         </Box>
       </Box>
     )

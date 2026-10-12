@@ -3,7 +3,15 @@ export type Note = {
   /** The note; may span several lines. */
   text: string
   isDone: boolean
+  /** When it was last marked done; notes done before this was kept have none. */
+  doneAt?: number
   isPinned: boolean
+  /**
+   * When it was archived: hidden from the lists, the status line, pinned
+   * context and export, and shown in the pane's archive view until restored
+   * or deleted for good.
+   */
+  archivedAt?: number
   /** Who wrote it: the person, or Claude through the add_note tool. */
   author: 'you' | 'claude'
   createdAt: number
@@ -32,14 +40,15 @@ export type EditorSession = {
   line: number | null
 }
 
-/** The last deleted note, kept so it can be put back. */
-export type DeletedNote = {
-  /** This delete's own id: the same note deleted again is a new delete. */
+/** The last archive (one note, or every one `clear done` swept), kept for undo. */
+export type ArchiveUndo = {
+  /** This archive's own id: the same note archived again is a new archive. */
   id: string
-  note: Note
-  /** Where it stood in the saved list. */
-  index: number
-  /** While the pane shows its undo button (a few seconds after the delete). */
+  /** The notes it archived. */
+  noteIds: string[]
+  /** What it archived, as the pane and the toasts say it. */
+  label: string
+  /** While the pane shows its undo button (a few seconds after the archive). */
   isOffered: boolean
 }
 
@@ -60,8 +69,10 @@ declare module 'claude-code' {
       query: string
       /** The tag the pane filters on (lowercase, no `#`), or null for all. */
       tag: string | null
-      /** The last deleted note, until it is restored or another is deleted. */
-      deleted: DeletedNote | null
+      /** The last archive, until it is undone or another one replaces it. */
+      lastArchive: ArchiveUndo | null
+      /** The pane shows the archive view (done notes by week, archived notes). */
+      isArchiveView: boolean
     }
   }
 }

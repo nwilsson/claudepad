@@ -21,9 +21,12 @@ mod's own store under your Claude Code config folder.
 - **Per-project and global notes.** Project notes are tied to the session's
   folder, so each repo keeps its own list. Global notes follow you
   everywhere.
-- **Done, pin, edit, move, delete.** One button each on every note, and
-  **clear done** at the bottom sweeps finished ones away. A delete can be
-  undone from the pane for 5 seconds, and with `/notes undo` after that.
+- **Done, pin, edit, move, archive.** One button each on every note, and
+  **clear done** at the bottom archives every finished one. An archive can
+  be undone from the pane for 5 seconds, and with `/notes undo` after that.
+- **An archive view.** **🗄 archive** shows what you finished, week by week,
+  and what you archived. Restore a note from there, or delete it for good:
+  the only place a note is ever deleted.
 - **Search.** Every word must match; `#tag` matches a tag exactly. The same
   search is `/notes find <text>`.
 - **Tags.** Write `#hashtags` in a note. The pane colors them and adds a

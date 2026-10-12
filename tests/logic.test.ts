@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
+  doneByWeek,
   dueOf,
   editorCommand,
   exportOrder,
@@ -22,6 +23,8 @@ import {
   tagCounts,
   tagged,
   toMarkdown,
+  weekOf,
+  withDone,
 } from '../hooks/notes'
 import type { Note } from '../types'
 
@@ -212,4 +215,40 @@ test('a reference resolves under the note folder unless absolute, and opens in t
   expect(editorCommand('jetbrains', '/w/a.ts', { line: 4, column: 2 })).toEqual([
     'idea', '--line', '4', '--column', '2', '/w/a.ts',
   ])
+})
+
+test('done keeps its time: set on done, cleared on reopen, kept when nothing changes', () => {
+  const done = withDone(note('a'), true, 500)
+  expect([done.isDone, done.doneAt]).toEqual([true, 500])
+  expect(withDone(done, true, 900)).toBe(done)
+  const open = withDone(done, false, 900)
+  expect([open.isDone, 'doneAt' in open]).toEqual([false, false])
+})
+
+test('done notes group by the Monday of their week, newest first, undated last', () => {
+  const at = (y: number, m: number, d: number) => new Date(y, m - 1, d, 15).getTime()
+  expect(weekOf(at(2026, 10, 12))).toBe('2026-10-12') // a Monday
+  expect(weekOf(at(2026, 10, 18))).toBe('2026-10-12') // its Sunday
+  expect(weekOf(at(2026, 10, 1))).toBe('2026-09-28') // across a month
+  const list = [
+    note('undated', { isDone: true }),
+    note('open'),
+    note('last week', { isDone: true, doneAt: at(2026, 10, 9) }),
+    note('monday', { isDone: true, doneAt: at(2026, 10, 12) }),
+    note('friday', { isDone: true, doneAt: at(2026, 10, 16) }),
+  ]
+  expect(doneByWeek(list).map(([week, done]) => [week, done.map(n => n.text)])).toEqual([
+    ['2026-10-12', ['friday', 'monday']],
+    ['2026-10-05', ['last week']],
+    [null, ['undated']],
+  ])
+})
+
+test('archived notes stay out of lists, counts and export, and an import leaves them archived', () => {
+  const list = [note('kept #a'), note('shelved #b', { archivedAt: 1, isDone: true })]
+  expect(statusFor(list, '/work/demo')).toBe('📝 1 here · 0 global')
+  expect(toMarkdown(list, '/work/demo', 0)).not.toContain('shelved')
+  const merged = mergeImport(list, parseMarkdown('- [ ] shelved #b\n'), '/work/demo', false, 0)
+  expect([merged.added, merged.updated]).toEqual([0, 0])
+  expect(merged.list[1]).toEqual(list[1])
 })

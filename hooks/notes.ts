@@ -51,6 +51,27 @@ export const isGlobal = (note: Note) => note.project == null
 
 export const isHere = (note: Note, project: string) => note.project === project
 
+export const isArchived = (note: Note) => note.archivedAt != null
+
+/** The notes not archived: what every list, count and export shows. */
+export const live = (list: readonly Note[]) => list.filter(note => !isArchived(note))
+
+/** The note marked done or open as of `now`; `doneAt` follows, and stays when nothing changes. */
+export const withDone = (note: Note, isDone: boolean, now: number): Note => {
+  if (note.isDone === isDone) return note
+  const changed: Note = { ...note, isDone }
+  if (isDone) changed.doneAt = now
+  else delete changed.doneAt
+  return changed
+}
+
+/** The note out of the archive. */
+export const unarchived = (note: Note): Note => {
+  const restored = { ...note }
+  delete restored.archivedAt
+  return restored
+}
+
 /** The store key of the global notes; each project's are under `project:` and its folder. */
 export const GLOBAL_KEY = 'global'
 const PROJECT_PREFIX = 'project:'
@@ -188,9 +209,32 @@ export const localDate = (ms: number) => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
+/** The Monday that starts the local week `ms` falls in, as YYYY-MM-DD. */
+export const weekOf = (ms: number) => {
+  const date = new Date(ms)
+  date.setHours(12, 0, 0, 0)
+  date.setDate(date.getDate() - ((date.getDay() + 6) % 7))
+  return localDate(date.getTime())
+}
+
+/**
+ * The done notes by the week they were finished, newest week first and the
+ * latest finished first within it. Notes done before `doneAt` was kept come
+ * last, under a null week.
+ */
+export const doneByWeek = (list: readonly Note[]) => {
+  const groups = new Map<string | null, Note[]>()
+  const done = list.filter(note => note.isDone).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0))
+  for (const note of done) {
+    const week = note.doneAt === undefined ? null : weekOf(note.doneAt)
+    groups.set(week, [...(groups.get(week) ?? []), note])
+  }
+  return [...groups].sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : b.localeCompare(a)))
+}
+
 /** This project's and the global open notes due before `today`, earliest first. */
 export const overdue = (list: readonly Note[], project: string, today: string) =>
-  list
+  live(list)
     .filter(note => !note.isDone && (isGlobal(note) || isHere(note, project)))
     .map(note => ({ note, due: dueOf(note.text) }))
     .filter((item): item is { note: Note; due: string } => item.due !== undefined && item.due < today)
@@ -199,8 +243,9 @@ export const overdue = (list: readonly Note[], project: string, today: string) =
 
 /** The status line: open notes here and global, and how many are overdue when `today` is given. */
 export const statusFor = (list: readonly Note[], project: string, today?: string) => {
-  const here = list.filter(note => isHere(note, project) && !note.isDone).length
-  const global = list.filter(note => isGlobal(note) && !note.isDone).length
+  const open = live(list).filter(note => !note.isDone)
+  const here = open.filter(note => isHere(note, project)).length
+  const global = open.filter(isGlobal).length
   if (here === 0 && global === 0) return undefined
   const late = today === undefined ? 0 : overdue(list, project, today).length
   return `📝 ${here} here · ${global} global${late ? ` · ⏰ ${late} overdue` : ''}`
@@ -256,7 +301,8 @@ const lines = (list: readonly Note[], withIds: boolean) =>
  * global, or a search over all. `withIds` (for Claude's tools) adds each
  * note's id, which complete_note and update_note take.
  */
-export const asText = (list: readonly Note[], project: string, search = '', withIds = false) => {
+export const asText = (all: readonly Note[], project: string, search = '', withIds = false) => {
+  const list = live(all)
   if (search.trim() !== '') {
     // Oldest first, whatever order the store keys hold the projects in.
     const found = list.filter(note => matches(note, search)).sort((a, b) => a.createdAt - b.createdAt)
@@ -288,7 +334,8 @@ export const EXPORT_FILE = 'NOTES.md'
 export const EXPORT_MARK = '<!-- exported by the claudepad mod for Claude Code; re-exporting replaces this file -->'
 
 /** This project's and the global notes as a NOTES.md, dated `now`. */
-export const toMarkdown = (list: readonly Note[], project: string, now = Date.now()) => {
+export const toMarkdown = (all: readonly Note[], project: string, now = Date.now()) => {
+  const list = live(all)
   // A multi-line note: its first line on the checkbox, the rest indented two
   // spaces beneath (a blank line inside it as two spaces, so it stays inside).
   const item = (note: Note) => {
@@ -413,8 +460,9 @@ export const mergeImport = (
     const index = replace ? undefined : at.get(key)
     const match = index === undefined ? undefined : list[index]
     if (index !== undefined && match) {
-      if (match.isDone !== item.isDone || match.isPinned !== item.isPinned) {
-        list[index] = { ...match, isDone: item.isDone, isPinned: item.isPinned }
+      // An archived note stays archived: an old file must not bring it back.
+      if (!isArchived(match) && (match.isDone !== item.isDone || match.isPinned !== item.isPinned)) {
+        list[index] = { ...withDone(match, item.isDone, now), isPinned: item.isPinned }
         updated += 1
       }
       return
@@ -425,6 +473,7 @@ export const mergeImport = (
         id: newId(),
         text: item.text,
         isDone: item.isDone,
+        ...(item.isDone ? { doneAt: now } : {}),
         isPinned: item.isPinned,
         author: item.author,
         createdAt: now + i,

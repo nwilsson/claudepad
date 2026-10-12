@@ -62,7 +62,9 @@ or more).
 - [ ] Make the store path configurable, so notes can live in a git-tracked folder across machines.
 - [ ] Branch-scoped notes.
 - [ ] Templates with variables, sent through the existing → prompt button.
-- [ ] Archive instead of delete, and a completed-by-week view.
+- [x] Archive instead of delete, and a completed-by-week view.
+  - Notes carry `doneAt` (set on done, cleared on reopen; `withDone()`) and `archivedAt`. **archive** replaces **delete**, and **clear done** archives every done note here and global in one go; both offer undo in the pane for 5 s and with `/notes undo` (which now restores a whole **clear done**). Archived notes are left out of the lists, search, the status line, overdue, pinned context, `list_notes` and export; an import that matches one leaves it archived, so an old file cannot bring it back.
+  - **🗄 archive (N)** opens the archive view for this project and global: done notes by the local week (Monday) they were finished, newest first, with notes done before `doneAt` existed under "Earlier", then archived notes that were not done. Each archived note can be restored or deleted for good, the only permanent delete.
 
 ## Phase 5: polish (S)
 

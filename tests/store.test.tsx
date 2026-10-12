@@ -129,7 +129,7 @@ test('a change writes only the keys it touches', async ($, on) => {
   expect(texts(stored.get('global'))).toEqual(['a1', 'g1'])
 
   writes.length = 0
-  await ui.press({ key: 'del-a1' })
+  await ui.press({ key: 'archive-a1' })
   expect(await notesCommand($, 'undo')).toBe('📝 Restored: a1')
   expect(writes).toEqual(['set global', 'set global'])
   expect(texts(stored.get('global'))).toEqual(['a1', 'g1'])
