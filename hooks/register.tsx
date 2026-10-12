@@ -16,6 +16,8 @@ const EDITOR_MODULE = './editor.tsx'
 
 /** Continuation lines of a multi-line note, indented to sit under its first line. */
 const indented = (text: string, by: string) => text.replace(/\n/g, `\n${by}`)
+/** The session's folder, normalized; the pane reads it so a directory change redraws it. */
+const folder = atom({ plugin: 'claudepad', key: 'folder' } as const, '')
 const scope = atom({ plugin: 'claudepad', key: 'scope' } as const, 'project' as Scope)
 const query = atom({ plugin: 'claudepad', key: 'query' } as const, '')
 const activeTag = atom({ plugin: 'claudepad', key: 'tag' } as const, null as string | null)
@@ -82,10 +84,17 @@ const statusFor = (list: readonly Note[], project: string) => {
   return `📝 ${here} here · ${global} global`
 }
 
-/** Changes the notes, keeps them on disk, and refreshes the status line. */
+const fromStore = (saved: unknown) => (Array.isArray(saved) ? (saved as Note[]) : [])
+
+/**
+ * Changes the notes, keeps them on disk, and refreshes the status line. Every
+ * session shares the one store key, so the change starts from the store as it
+ * is now, not this session's copy, which would drop notes another session added.
+ */
 const change = async ($: EngineInterface, fn: (list: Note[]) => Note[]) => {
-  const written = await update($, notes, list => fn([...list]))
+  const written = fn([...fromStore(await $.store.get(STORE_KEY))])
   await $.store.set(STORE_KEY, written)
+  await update($, notes, () => written)
   $.ui.status(statusFor(written, await projectOf($)))
   return written
 }
@@ -282,7 +291,7 @@ const importNotes = async ($: EngineInterface, replace: boolean) => {
   let updated = 0
   let removed = 0
   await change($, all => {
-    // `update` may run this again on a write conflict: count from zero each time.
+    // Count from zero each time, in case this runs more than once.
     added = 0
     updated = 0
     const kept = replace
@@ -364,10 +373,11 @@ const parseNoteArgs = (args: string): { text: string; where: Scope } => {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    const saved = await $.store.get(STORE_KEY)
-    const list = Array.isArray(saved) ? (saved as Note[]) : []
+    const list = fromStore(await $.store.get(STORE_KEY))
     await update($, notes, () => list)
-    $.ui.status(statusFor(list, await projectOf($)))
+    const project = await projectOf($)
+    await update($, folder, () => project)
+    $.ui.status(statusFor(list, project))
 
     await $.command.register({
       name: 'notes',
@@ -412,6 +422,14 @@ export const register: Register = on => {
       },
     })
 
+    return next(e)
+  })
+
+  // A new folder has its own notes: recount the status line and redraw the pane.
+  on('classic.CwdChanged', async ($, e, next) => {
+    const project = normalize(e.new_cwd)
+    await update($, folder, () => project)
+    $.ui.status(statusFor(await read($, notes), project))
     return next(e)
   })
 
@@ -528,7 +546,8 @@ export const register: Register = on => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     const Input = 'Input' in els ? els.Input : undefined
-    const project = await projectOf($)
+    // Reading the atom (not just the session) redraws the pane after a directory change.
+    const project = (await read($, folder)) || (await projectOf($))
     const list = await read($, notes)
     const where = await read($, scope)
 

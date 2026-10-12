@@ -37,6 +37,8 @@ declare module 'claude-code' {
       draft: string
       /** Use the line-by-line editor even where the full editor can draw. */
       isLineMode: boolean
+      /** The session's folder, normalized; empty before session.start. */
+      folder: string
       scope: Scope
       /** The pane's search text; empty shows every note. */
       query: string

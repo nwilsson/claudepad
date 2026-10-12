@@ -19,10 +19,12 @@ or more).
 
 ## Phase 1: correctness and safety (S–M)
 
-- [ ] Fix concurrent-session overwrites, if phase 0 confirms them. Options: per-project store keys, or merge on write.
-- [ ] Refresh the status line on directory change.
+- [x] Fix concurrent-session overwrites, if phase 0 confirms them. Options: per-project store keys, or merge on write.
+  - Merge on write: `change()` applies its edit to the store as it is now, not to the session's copy. A short gap between the read and the write remains, because the store has no `ifVersion`; per-project keys (phase 2) shrink it further. A session still shows other sessions' notes only after its own next change.
+- [x] Refresh the status line on directory change.
+  - `classic.CwdChanged` recounts the status line and sets a `folder` atom, which the pane reads so it redraws too.
 - [ ] Undo for delete: a toast with "undo" for about 5 seconds.
-- [ ] Add `NOTES.md` to `.gitignore`.
+- [x] Add `NOTES.md` to `.gitignore`.
 
 ## Phase 2: performance groundwork (M)
 
