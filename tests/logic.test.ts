@@ -1,11 +1,14 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
+  dueOf,
   exportOrder,
   groupByKey,
   keyOfProject,
+  localDate,
   mergeImport,
   migrate,
+  overdue,
   normalize,
   paneOrder,
   parseMarkdown,
@@ -151,4 +154,32 @@ test('small helpers: folder spelling, /note flags, previews', () => {
   expect(parseNoteArgs('-gx milk')).toEqual({ text: '-gx milk', where: 'project' })
   expect(preview('first\nsecond')).toBe('first')
   expect(preview('x'.repeat(61))).toBe(`${'x'.repeat(59)}…`)
+})
+
+test('a due date is #due: and a real YYYY-MM-DD date', () => {
+  expect(dueOf('call the bank #due:2026-10-20')).toBe('2026-10-20')
+  expect(dueOf('#due:2026-10-20, then relax')).toBe('2026-10-20')
+  expect(dueOf('no date #due')).toBeUndefined()
+  expect(dueOf('not a day #due:2026-02-30')).toBeUndefined()
+  expect(dueOf('glued #due:2026-10-20x')).toBeUndefined()
+  expect(dueOf('mid-word a#due:2026-10-20')).toBeUndefined()
+  expect(localDate(new Date(2026, 0, 5, 23, 59).getTime())).toBe('2026-01-05')
+})
+
+test('overdue: open notes here and global due before today, earliest first; status counts them', () => {
+  const list = [
+    note('later #due:2026-10-30'),
+    note('today #due:2026-10-12'),
+    note('late #due:2026-10-10'),
+    note('later still', { project: null }),
+    note('global late #due:2026-10-01', { project: null }),
+    note('done late #due:2026-10-01', { isDone: true }),
+    note('elsewhere late #due:2026-10-01', { project: '/work/other' }),
+  ]
+  expect(overdue(list, '/work/demo', '2026-10-12').map(n => n.text)).toEqual([
+    'global late #due:2026-10-01',
+    'late #due:2026-10-10',
+  ])
+  expect(statusFor(list, '/work/demo', '2026-10-12')).toBe('📝 3 here · 2 global · ⏰ 2 overdue')
+  expect(statusFor(list, '/work/demo')).toBe('📝 3 here · 2 global')
 })

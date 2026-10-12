@@ -26,6 +26,9 @@ mod's own store under your Claude Code config folder.
   search is `/notes find <text>`.
 - **Tags.** Write `#hashtags` in a note. The pane colors them and adds a
   clickable tag bar; `/notes tags` lists them.
+- **Due dates.** Write `#due:2026-10-20` in a note. A session starts with a
+  toast naming overdue notes, the status line counts them, and the pane
+  shows the date red once it has passed (amber on the day).
 - **A multi-line editor.** A full editor with cursor keys and `Ctrl+S` to
   save, with a line-by-line fallback where the full one cannot draw.
 - **`NOTES.md` sync.** `/notes export [--force]` writes the project's notes

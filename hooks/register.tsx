@@ -17,11 +17,13 @@ import {
   isNotesKey,
   keyOf,
   keyOfProject,
+  localDate,
   matches,
   mergeImport,
   migrate,
   newId,
   normalize,
+  overdue,
   paneOrder,
   parseMarkdown,
   parseNoteArgs,
@@ -94,7 +96,7 @@ const reload = async ($: EngineInterface, project: string) => {
   }
   const all = [...byKey.values()].flat()
   await update($, notes, () => all)
-  $.ui.status(statusFor(all, project))
+  $.ui.status(statusFor(all, project, localDate(Date.now())))
 }
 
 /**
@@ -122,7 +124,7 @@ const change = async ($: EngineInterface, keys: readonly string[], fn: (list: No
     ...current.filter(note => !touched.includes(keyOf(note))),
     ...written,
   ])
-  $.ui.status(statusFor(all, await projectOf($)))
+  $.ui.status(statusFor(all, await projectOf($), localDate(Date.now())))
   return written
 }
 
@@ -270,6 +272,15 @@ export const register: Register = on => {
     const project = await projectOf($)
     await update($, folder, () => project)
     await reload($, project)
+    // Overdue notes, here and global, are the first thing the session shows.
+    const late = overdue(await read($, notes), project, localDate(Date.now()))
+    if (late.length === 1) {
+      $.ui.toast(`⏰ Overdue: ${preview(late[0]!.text)}`, { timeoutMs: 8000 })
+    } else if (late.length > 1) {
+      const more = late.length > 3 ? ` · and ${late.length - 3} more` : ''
+      const shown = late.slice(0, 3).map(note => preview(note.text))
+      $.ui.toast(`⏰ ${late.length} overdue notes: ${shown.join(' · ')}${more}`, { timeoutMs: 8000 })
+    }
 
     await $.command.register({
       name: 'notes',
@@ -645,18 +656,26 @@ export const register: Register = on => {
       )
     }
 
-    /** The note's text with each #tag drawn in its color. */
+    const today = localDate(Date.now())
+
+    /**
+     * The note's text with each #tag drawn in its color. A `#due:` date is
+     * drawn whole: red once overdue, amber on the day.
+     */
     const withTags = (text: string, isDone: boolean) => {
       const parts: (string | ReturnType<typeof h>)[] = []
       let at = 0
       for (const m of text.matchAll(TAG)) {
         const start = m.index! + m[1]!.length
         if (start > at) parts.push(text.slice(at, start))
-        const word = text.slice(start, m.index! + m[0].length)
-        parts.push(
-          isDone ? word : <Text color={colorOf(m[2]!.toLowerCase())}>{word}</Text>,
-        )
-        at = m.index! + m[0].length
+        const tag = m[2]!.toLowerCase()
+        let end = m.index! + m[0].length
+        const date = tag === 'due' ? /^:(\d{4}-\d{2}-\d{2})/.exec(text.slice(end))?.[1] : undefined
+        if (date) end += date.length + 1
+        const word = text.slice(start, end)
+        const color = date && date < today ? '#e01b24' : date === today ? '#e5a50a' : colorOf(tag)
+        parts.push(isDone ? word : <Text color={color} bold={date !== undefined && date <= today}>{word}</Text>)
+        at = end
       }
       if (at < text.length) parts.push(text.slice(at))
       return parts

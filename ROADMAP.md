@@ -47,7 +47,9 @@ or more).
 
 - [x] `complete_note` and `update_note` tools, so Claude can close the TODOs it finishes.
   - Both take a note's id, which `list_notes` and `add_note` now report (`/notes find`, for the person, does not). `complete_note` takes `done: false` to reopen; `update_note` replaces the text and its tags. An unknown id or empty text is refused, and every change shows a toast.
-- [ ] Due dates via a `#due:YYYY-MM-DD` tag, with overdue notes surfaced at `session.start`.
+- [x] Due dates via a `#due:YYYY-MM-DD` tag, with overdue notes surfaced at `session.start`.
+  - `dueOf()` reads a real date only (`#due:2026-02-30` is none); dates compare on the local calendar. Open overdue notes here and global get a toast at `session.start` (up to three named) and a `⏰ N overdue` count on the status line, kept on every change. The pane draws the date red once past, amber on the day. `#due` stays an ordinary tag, so the tag bar filters every dated note.
+  - Not done: sorting by due date, and telling Claude which notes are overdue (`list_notes` shows the dates as written).
 - [ ] "Save last response as note."
 - [ ] Notes can carry a `path:line` link that opens the file.
 

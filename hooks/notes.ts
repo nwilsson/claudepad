@@ -119,11 +119,45 @@ export const preview = (text: string) => {
   return first.length > 60 ? `${first.slice(0, 59)}…` : first
 }
 
-export const statusFor = (list: readonly Note[], project: string) => {
+/**
+ * A due date in a note: `#due:` then YYYY-MM-DD, ending at a space or
+ * punctuation. Its `#due` is an ordinary tag too, so the tag bar finds every
+ * dated note.
+ */
+const DUE = /(?:^|\s)#due:(\d{4})-(\d{2})-(\d{2})(?![\p{L}\p{N}_-])/u
+
+/** The note's due date as YYYY-MM-DD, or undefined when it has none (or not a real date). */
+export const dueOf = (text: string) => {
+  const m = DUE.exec(text)
+  if (!m) return undefined
+  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? `${m[1]}-${m[2]}-${m[3]}` : undefined
+}
+
+/** The date at `ms` on the local calendar, as YYYY-MM-DD, which compares as text. */
+export const localDate = (ms: number) => {
+  const date = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+/** This project's and the global open notes due before `today`, earliest first. */
+export const overdue = (list: readonly Note[], project: string, today: string) =>
+  list
+    .filter(note => !note.isDone && (isGlobal(note) || isHere(note, project)))
+    .map(note => ({ note, due: dueOf(note.text) }))
+    .filter((item): item is { note: Note; due: string } => item.due !== undefined && item.due < today)
+    .sort((a, b) => a.due.localeCompare(b.due))
+    .map(item => item.note)
+
+/** The status line: open notes here and global, and how many are overdue when `today` is given. */
+export const statusFor = (list: readonly Note[], project: string, today?: string) => {
   const here = list.filter(note => isHere(note, project) && !note.isDone).length
   const global = list.filter(note => isGlobal(note) && !note.isDone).length
   if (here === 0 && global === 0) return undefined
-  return `📝 ${here} here · ${global} global`
+  const late = today === undefined ? 0 : overdue(list, project, today).length
+  return `📝 ${here} here · ${global} global${late ? ` · ⏰ ${late} overdue` : ''}`
 }
 
 /** The pane's order: pinned first, then open before done, then oldest. */
