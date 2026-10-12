@@ -20,7 +20,8 @@ mod's own store under your Claude Code config folder.
   folder, so each repo keeps its own list. Global notes follow you
   everywhere.
 - **Done, pin, edit, move, delete.** One button each on every note, and
-  **clear done** at the bottom sweeps finished ones away.
+  **clear done** at the bottom sweeps finished ones away. A delete can be
+  undone from the pane for 5 seconds, and with `/notes undo` after that.
 - **Search.** Every word must match; `#tag` matches a tag exactly. The same
   search is `/notes find <text>`.
 - **Tags.** Write `#hashtags` in a note. The pane colors them and adds a

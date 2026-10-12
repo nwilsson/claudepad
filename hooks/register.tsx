@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { EditorSession, Note, Scope } from '../types'
+import type { DeletedNote, EditorSession, Note, Scope } from '../types'
 
 const PANE = 'claudepad'
 const STORE_KEY = 'notes'
@@ -21,6 +21,10 @@ const folder = atom({ plugin: 'claudepad', key: 'folder' } as const, '')
 const scope = atom({ plugin: 'claudepad', key: 'scope' } as const, 'project' as Scope)
 const query = atom({ plugin: 'claudepad', key: 'query' } as const, '')
 const activeTag = atom({ plugin: 'claudepad', key: 'tag' } as const, null as string | null)
+const deleted = atom({ plugin: 'claudepad', key: 'deleted' } as const, null as DeletedNote | null)
+
+/** How long the pane offers to undo a delete. */
+const UNDO_MS = 5000
 
 /** A tag is `#` then letters, digits, `_` or `-`, at the start or after a space. */
 const TAG = /(^|\s)#([\p{L}\p{N}_-]+)/gu
@@ -97,6 +101,47 @@ const change = async ($: EngineInterface, fn: (list: Note[]) => Note[]) => {
   await update($, notes, () => written)
   $.ui.status(statusFor(written, await projectOf($)))
   return written
+}
+
+/** A note's first line, cut to fit a toast or a pane line. */
+const preview = (text: string) => {
+  const first = text.split('\n')[0]!
+  return first.length > 60 ? `${first.slice(0, 59)}…` : first
+}
+
+/**
+ * Deletes a note and keeps it for undo: the pane offers an undo button for
+ * UNDO_MS, and /notes undo puts it back until the next delete.
+ */
+const deleteNote = async ($: EngineInterface, id: string) => {
+  let removed = null as Pick<DeletedNote, 'note' | 'index'> | null
+  await change($, all => {
+    const index = all.findIndex(note => note.id === id)
+    removed = index < 0 ? null : { note: all[index]!, index }
+    return index < 0 ? all : all.filter(note => note.id !== id)
+  })
+  if (!removed) return
+  const { note, index } = removed
+  const deleteId = newId()
+  await update($, deleted, () => ({ id: deleteId, note, index, isOffered: true }))
+  $.ui.toast(`🗑 Deleted: ${preview(note.text)} (undo in the pane, or /notes undo)`, { timeoutMs: UNDO_MS })
+  // Hides only this delete's button: a later one, even of the same note, has its own timer.
+  $.clock.after(UNDO_MS, () => {
+    void update($, deleted, last => (last?.id === deleteId ? { ...last, isOffered: false } : last))
+  })
+}
+
+/** Puts the last deleted note back where it stood. */
+const undoDelete = async ($: EngineInterface) => {
+  const last = await read($, deleted)
+  if (!last) return 'Nothing to undo.'
+  await change($, all =>
+    all.some(note => note.id === last.note.id)
+      ? all
+      : [...all.slice(0, last.index), last.note, ...all.slice(last.index)],
+  )
+  await update($, deleted, () => null)
+  return `📝 Restored: ${preview(last.note.text)}`
 }
 
 const addNote = async ($: EngineInterface, text: string, author: Note['author'], where: Scope) => {
@@ -382,8 +427,8 @@ export const register: Register = on => {
     await $.command.register({
       name: 'notes',
       description:
-        'Open or close the notepad pane; /notes find <text> searches, /notes tags lists tags, /notes export and /notes import sync NOTES.md',
-      argumentHint: '[find <text> | tags | export | import]',
+        'Open or close the notepad pane; /notes find <text> searches, /notes tags lists tags, /notes export and /notes import sync NOTES.md, /notes undo restores the last deleted note',
+      argumentHint: '[find <text> | tags | export | import | undo]',
     })
     await $.command.register({
       name: 'note',
@@ -453,6 +498,9 @@ export const register: Register = on => {
     if (importArgs) {
       const replace = /(^|\s)--replace(\s|$)/.test(importArgs[1] ?? '')
       return { text: await importNotes($, replace) }
+    }
+    if (/^\s*undo\s*$/i.test(e.args)) {
+      return { text: await undoDelete($) }
     }
     if (/^\s*tags\s*$/i.test(e.args)) {
       const counts = tagCounts(await read($, notes))
@@ -665,6 +713,7 @@ export const register: Register = on => {
 
     const search = (await read($, query)).trim()
     const tag = await read($, activeTag)
+    const undo = await read($, deleted)
     const isSearching = search !== '' || tag !== null
     const shown = (note: Note) =>
       (search === '' || matches(note, search)) && (tag === null || tagsOf(note.text).includes(tag))
@@ -752,7 +801,7 @@ export const register: Register = on => {
             key={`del-${note.id}`}
             plain
             dimColor
-            onPress={() => change($, all => all.filter(other => other.id !== note.id))}
+            onPress={() => deleteNote($, note.id)}
           >
             delete
           </Button>
@@ -843,6 +892,15 @@ export const register: Register = on => {
                 all tags
               </Button>
             )}
+          </Box>
+        )}
+
+        {undo?.isOffered && (
+          <Box marginTop={1} gap={1}>
+            <Text dimColor>🗑 Deleted: {preview(undo.note.text)}</Text>
+            <Button key="undo-delete" plain onPress={async () => $.ui.toast(await undoDelete($))}>
+              undo
+            </Button>
           </Box>
         )}
 

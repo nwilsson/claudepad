@@ -23,7 +23,8 @@ or more).
   - Merge on write: `change()` applies its edit to the store as it is now, not to the session's copy. A short gap between the read and the write remains, because the store has no `ifVersion`; per-project keys (phase 2) shrink it further. A session still shows other sessions' notes only after its own next change.
 - [x] Refresh the status line on directory change.
   - `classic.CwdChanged` recounts the status line and sets a `folder` atom, which the pane reads so it redraws too.
-- [ ] Undo for delete: a toast with "undo" for about 5 seconds.
+- [x] Undo for delete: a toast with "undo" for about 5 seconds.
+  - Toasts carry text only, so the toast points at an **undo** button the pane shows for 5 s. `/notes undo` restores the last deleted note after that too, back where it stood. **clear done** is not covered.
 - [x] Add `NOTES.md` to `.gitignore`.
 
 ## Phase 2: performance groundwork (M)

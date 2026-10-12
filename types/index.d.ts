@@ -27,6 +27,17 @@ export type EditorSession = {
   line: number | null
 }
 
+/** The last deleted note, kept so it can be put back. */
+export type DeletedNote = {
+  /** This delete's own id: the same note deleted again is a new delete. */
+  id: string
+  note: Note
+  /** Where it stood in the saved list. */
+  index: number
+  /** While the pane shows its undo button (a few seconds after the delete). */
+  isOffered: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
     claudepad: {
@@ -44,6 +55,8 @@ declare module 'claude-code' {
       query: string
       /** The tag the pane filters on (lowercase, no `#`), or null for all. */
       tag: string | null
+      /** The last deleted note, until it is restored or another is deleted. */
+      deleted: DeletedNote | null
     }
   }
 }
