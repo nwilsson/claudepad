@@ -38,7 +38,10 @@ or more).
   - Keyed by scope and loose text; the first of two alike notes wins, and a line the file repeats merges into the note it added, as the scan did.
 - [x] Keep a derived `pinned` atom so `prompt.submit` skips the full scan.
   - `derive([notes], …)` keeps the open pinned notes of every project and recomputes only when the notes change; `prompt.submit` filters that short list to this project and global.
-- [ ] Write per-project store keys, or one document per note, so writes are proportional to the change.
+- [x] Write per-project store keys, or one document per note, so writes are proportional to the change.
+  - Per-project keys: `global`, and `project:` plus the normalized folder (a folder over 200 characters is cut and hashed, because the store refuses keys over 256). A change reads and writes only its own keys (a move, both), and deletes a key left empty. The whole store is still one JSON file that the host rewrites on every `set`, so the gain is smaller values and fewer clashes between sessions, not smaller disk writes. One document per note was ruled out: loading would take one `get`, a full file read, per note.
+  - The old `notes` key moves to the new keys on load (`session.start`, and a directory change, which also picks up other sessions' notes). A session still on an older version can write `notes` again; the next load folds in what it added, but can bring back a note the new layout deleted.
+  - Two sessions saving the same project at the same instant can still lose one change: the store has no `ifVersion`.
 
 ## Phase 3: Claude-aware features (M)
 

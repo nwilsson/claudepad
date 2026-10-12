@@ -5,14 +5,21 @@ import type { DeletedNote, EditorSession, Note, Scope } from '../types'
 import {
   EXPORT_FILE,
   EXPORT_MARK,
+  GLOBAL_KEY,
+  LEGACY_KEY,
   TAG,
   asText,
   baseName,
+  groupByKey,
   indented,
   isGlobal,
   isHere,
+  isNotesKey,
+  keyOf,
+  keyOfProject,
   matches,
   mergeImport,
+  migrate,
   newId,
   normalize,
   paneOrder,
@@ -28,7 +35,6 @@ import {
 } from './notes'
 
 const PANE = 'claudepad'
-const STORE_KEY = 'notes'
 const ADD_TOOL = 'mcp__claudepad__add_note'
 const LIST_TOOL = 'mcp__claudepad__list_notes'
 
@@ -67,16 +73,62 @@ const fromStore = (saved: unknown) =>
   Array.isArray(saved) ? (saved as Note[]).map(note => (note.tags ? note : tagged(note))) : []
 
 /**
- * Changes the notes, keeps them on disk, and refreshes the status line. Every
- * session shares the one store key, so the change starts from the store as it
- * is now, not this session's copy, which would drop notes another session added.
+ * Reads every note from the store into the session, and refreshes the status
+ * line for `project`. Notes still under the old single key move to their
+ * per-project keys.
  */
-const change = async ($: EngineInterface, fn: (list: Note[]) => Note[]) => {
-  const written = fn([...fromStore(await $.store.get(STORE_KEY))])
-  await $.store.set(STORE_KEY, written)
-  await update($, notes, () => written)
-  $.ui.status(statusFor(written, await projectOf($)))
+const reload = async ($: EngineInterface, project: string) => {
+  const keys = await $.store.keys()
+  const stored = new Map<string, Note[]>()
+  for (const key of keys.filter(isNotesKey)) stored.set(key, fromStore(await $.store.get(key)))
+  let byKey: ReadonlyMap<string, Note[]> = stored
+  if (keys.includes(LEGACY_KEY)) {
+    byKey = migrate(fromStore(await $.store.get(LEGACY_KEY)), stored)
+    for (const [key, list] of byKey) {
+      // `migrate` only adds, so a key it left alone has as many notes as before.
+      if (list.length !== stored.get(key)?.length) await $.store.set(key, list)
+    }
+    await $.store.delete(LEGACY_KEY)
+  }
+  const all = [...byKey.values()].flat()
+  await update($, notes, () => all)
+  $.ui.status(statusFor(all, project))
+}
+
+/**
+ * Changes the notes stored under `keys`, and refreshes the status line. It
+ * starts from the store as it is now, not this session's copy, so a note
+ * another session added there survives; and it reads and writes only those
+ * keys, so changes to other projects never meet. `fn` gets those keys' notes
+ * and may return only notes that belong under them.
+ */
+const change = async ($: EngineInterface, keys: readonly string[], fn: (list: Note[]) => Note[]) => {
+  const touched = [...new Set(keys)]
+  const before: Note[] = []
+  for (const key of touched) before.push(...fromStore(await $.store.get(key)))
+  const written = fn(before)
+  const groups = groupByKey(written)
+  const stray = [...groups.keys()].find(key => !touched.includes(key))
+  if (stray !== undefined) {
+    throw new Error(`claudepad: a change returned a note for ${stray}, outside ${touched.join(', ')}`)
+  }
+  for (const key of touched) {
+    const list = groups.get(key)
+    await (list ? $.store.set(key, list) : $.store.delete(key))
+  }
+  const all = await update($, notes, current => [
+    ...current.filter(note => !touched.includes(keyOf(note))),
+    ...written,
+  ])
+  $.ui.status(statusFor(all, await projectOf($)))
   return written
+}
+
+/** Changes one note, under the key this session last saw it in. */
+const changeNote = async ($: EngineInterface, id: string, fn: (note: Note) => Note) => {
+  const seen = (await read($, notes)).find(note => note.id === id)
+  if (!seen) return
+  await change($, [keyOf(seen)], all => all.map(note => (note.id === id ? fn(note) : note)))
 }
 
 /**
@@ -84,8 +136,11 @@ const change = async ($: EngineInterface, fn: (list: Note[]) => Note[]) => {
  * UNDO_MS, and /notes undo puts it back until the next delete.
  */
 const deleteNote = async ($: EngineInterface, id: string) => {
+  const seen = (await read($, notes)).find(note => note.id === id)
+  if (!seen) return
+  // `index` is the note's place among its key's notes.
   let removed = null as Pick<DeletedNote, 'note' | 'index'> | null
-  await change($, all => {
+  await change($, [keyOf(seen)], all => {
     const index = all.findIndex(note => note.id === id)
     removed = index < 0 ? null : { note: all[index]!, index }
     return index < 0 ? all : all.filter(note => note.id !== id)
@@ -105,7 +160,7 @@ const deleteNote = async ($: EngineInterface, id: string) => {
 const undoDelete = async ($: EngineInterface) => {
   const last = await read($, deleted)
   if (!last) return 'Nothing to undo.'
-  await change($, all =>
+  await change($, [keyOf(last.note)], all =>
     all.some(note => note.id === last.note.id)
       ? all
       : [...all.slice(0, last.index), last.note, ...all.slice(last.index)],
@@ -124,7 +179,7 @@ const addNote = async ($: EngineInterface, text: string, author: Note['author'],
     createdAt: Date.now(),
     project: where === 'global' ? null : await projectOf($),
   })
-  await change($, list => [...list, note])
+  await change($, [keyOf(note)], list => [...list, note])
   return note
 }
 
@@ -160,7 +215,7 @@ const importNotes = async ($: EngineInterface, replace: boolean) => {
   }
   const project = await projectOf($)
   let counts = { added: 0, updated: 0, removed: 0 }
-  await change($, all => {
+  await change($, [keyOfProject(project), GLOBAL_KEY], all => {
     const { list, ...merged } = mergeImport(all, parsed, project, replace, Date.now())
     counts = merged
     return list
@@ -198,7 +253,7 @@ const saveEditor = async ($: EngineInterface, text?: string) => {
   if (session.id === 'new') {
     await addNote($, body, 'you', await read($, scope))
   } else {
-    await change($, all => all.map(note => (note.id === session.id ? tagged({ ...note, text: body }) : note)))
+    await changeNote($, session.id, note => tagged({ ...note, text: body }))
   }
   await closeEditor($)
   return session.id === 'new' ? '📝 Note added.' : '📝 Note saved.'
@@ -206,11 +261,9 @@ const saveEditor = async ($: EngineInterface, text?: string) => {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    const list = fromStore(await $.store.get(STORE_KEY))
-    await update($, notes, () => list)
     const project = await projectOf($)
     await update($, folder, () => project)
-    $.ui.status(statusFor(list, project))
+    await reload($, project)
 
     await $.command.register({
       name: 'notes',
@@ -258,11 +311,12 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // A new folder has its own notes: recount the status line and redraw the pane.
+  // A new folder has its own notes: read them fresh (other sessions may have
+  // written since), recount the status line and redraw the pane.
   on('classic.CwdChanged', async ($, e, next) => {
     const project = normalize(e.new_cwd)
     await update($, folder, () => project)
-    $.ui.status(statusFor(await read($, notes), project))
+    await reload($, project)
     return next(e)
   })
 
@@ -521,14 +575,15 @@ export const register: Register = on => {
     }
 
     const toggle = (id: string, field: 'isDone' | 'isPinned') =>
-      change($, all => all.map(note => (note.id === id ? { ...note, [field]: !note[field] } : note)))
+      changeNote($, id, note => ({ ...note, [field]: !note[field] }))
 
-    const move = (id: string) =>
-      change($, all =>
-        all.map(note =>
-          note.id === id ? { ...note, project: isGlobal(note) ? project : null } : note,
-        ),
+    // A global note moves to this project; any other to global. The change spans both keys.
+    const move = (moved: Note) => {
+      const to = isGlobal(moved) ? project : null
+      return change($, [keyOf(moved), keyOfProject(to)], all =>
+        all.map(note => (note.id === moved.id ? { ...note, project: to } : note)),
       )
+    }
 
     /** The note's text with each #tag drawn in its color. */
     const withTags = (text: string, isDone: boolean) => {
@@ -573,7 +628,7 @@ export const register: Register = on => {
           <Button key={`edit-${note.id}`} plain dimColor onPress={() => openEditor($, note.id, note.text)}>
             edit
           </Button>
-          <Button key={`move-${note.id}`} plain dimColor onPress={() => move(note.id)}>
+          <Button key={`move-${note.id}`} plain dimColor onPress={() => move(note)}>
             {isGlobal(note) ? '→ project' : '→ global'}
           </Button>
           <Button
@@ -732,9 +787,7 @@ export const register: Register = on => {
               plain
               dimColor
               onPress={() =>
-                change($, all =>
-                  all.filter(note => !(note.isDone && (isGlobal(note) || isHere(note, project)))),
-                )
+                change($, [keyOfProject(project), GLOBAL_KEY], all => all.filter(note => !note.isDone))
               }
             >
               clear done

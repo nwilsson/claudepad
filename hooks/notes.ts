@@ -51,6 +51,63 @@ export const isGlobal = (note: Note) => note.project == null
 
 export const isHere = (note: Note, project: string) => note.project === project
 
+/** The store key of the global notes; each project's are under `project:` and its folder. */
+export const GLOBAL_KEY = 'global'
+const PROJECT_PREFIX = 'project:'
+/** The old layout: every note under this one key. */
+export const LEGACY_KEY = 'notes'
+/** The store refuses keys over 256 characters: a longer folder is cut here and hashed. */
+const MAX_PATH_IN_KEY = 200
+
+/** FNV-1a over the UTF-16 code units, 32 bits, as 8 hex digits. */
+const fnv = (text: string, seed: number) => {
+  let hash = seed
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0
+  return hash.toString(16).padStart(8, '0')
+}
+
+/** The store key of a project's notes (or the global ones, for null). */
+export const keyOfProject = (project: string | null | undefined) =>
+  project == null
+    ? GLOBAL_KEY
+    : project.length <= MAX_PATH_IN_KEY
+      ? `${PROJECT_PREFIX}${project}`
+      : `${PROJECT_PREFIX}${project.slice(0, MAX_PATH_IN_KEY)}…${fnv(project, 0x811c9dc5)}${fnv(project, 0x9e3779b9)}`
+
+export const keyOf = (note: Note) => keyOfProject(note.project)
+
+/** A store key that holds notes in the per-project layout. */
+export const isNotesKey = (key: string) => key === GLOBAL_KEY || key.startsWith(PROJECT_PREFIX)
+
+/** The notes by store key, each key's in list order. */
+export const groupByKey = (list: readonly Note[]) => {
+  const groups = new Map<string, Note[]>()
+  for (const note of list) {
+    const key = keyOf(note)
+    const group = groups.get(key)
+    if (group) group.push(note)
+    else groups.set(key, [note])
+  }
+  return groups
+}
+
+/**
+ * Folds the old single-key list into the per-key layout. A note already stored
+ * under some key keeps that copy; any other joins the end of its key's list.
+ * Running it again on what it returned changes nothing.
+ */
+export const migrate = (legacy: readonly Note[], stored: ReadonlyMap<string, readonly Note[]>) => {
+  const result = new Map([...stored].map(([key, list]) => [key, [...list]]))
+  const ids = new Set([...stored.values()].flat().map(note => note.id))
+  for (const note of legacy) {
+    if (ids.has(note.id)) continue
+    ids.add(note.id)
+    const key = keyOf(note)
+    result.set(key, [...(result.get(key) ?? []), note])
+  }
+  return result
+}
+
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 /** Continuation lines of a multi-line note, indented to sit under its first line. */
@@ -106,7 +163,8 @@ const lines = (list: readonly Note[]) =>
 /** The notes as /notes find and list_notes give them: this project's and global, or a search over all. */
 export const asText = (list: readonly Note[], project: string, search = '') => {
   if (search.trim() !== '') {
-    const found = list.filter(note => matches(note, search))
+    // Oldest first, whatever order the store keys hold the projects in.
+    const found = list.filter(note => matches(note, search)).sort((a, b) => a.createdAt - b.createdAt)
     return found.length === 0
       ? `No notes match "${search.trim()}".`
       : `${plural(found.length, 'note')} matching "${search.trim()}":\n` +

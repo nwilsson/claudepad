@@ -2,7 +2,10 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   exportOrder,
+  groupByKey,
+  keyOfProject,
   mergeImport,
+  migrate,
   normalize,
   paneOrder,
   parseMarkdown,
@@ -100,6 +103,35 @@ test('merge matches through its key map as a scan would: first alike wins, repea
   ])
   // A note the import adds carries its tags.
   expect(merged.list[3]!.tags).toEqual(['tag'])
+})
+
+test('a store key fits the 256-character key limit, however long the folder', () => {
+  expect(keyOfProject(null)).toBe('global')
+  expect(keyOfProject('e:/code/x')).toBe('project:e:/code/x')
+  const long = `/${'d'.repeat(300)}`
+  const key = keyOfProject(long)
+  expect(key.length).toBeLessThanOrEqual(256)
+  expect(key.startsWith(`project:/${'d'.repeat(199)}…`)).toBe(true)
+  // Long folders that share the first 200 characters still get their own keys.
+  expect(keyOfProject(`${long}x`)).not.toBe(key)
+  expect(keyOfProject(long)).toBe(key)
+})
+
+test('migrate folds the old list into per-key lists, and again changes nothing', () => {
+  const legacy = [note('a1'), note('g1', { project: null }), note('a2')]
+  const once = migrate(legacy, new Map())
+  expect([...once].map(([key, list]) => [key, list.map(n => n.id)])).toEqual([
+    ['project:/work/demo', ['a1', 'a2']],
+    ['global', ['g1']],
+  ])
+  expect(migrate(legacy, once)).toEqual(once)
+  // A note already stored keeps its stored copy, even under another key.
+  const moved = new Map([['global', [note('a1', { project: null, text: 'moved' })]]])
+  expect([...migrate(legacy, moved)].map(([key, list]) => [key, list.map(n => n.text)])).toEqual([
+    ['global', ['moved', 'g1']],
+    ['project:/work/demo', ['a2']],
+  ])
+  expect([...groupByKey(legacy).keys()]).toEqual(['project:/work/demo', 'global'])
 })
 
 test('status counts open notes here and global, and is empty with none', () => {
