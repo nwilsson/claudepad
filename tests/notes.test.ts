@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 // The notes logic (search, tags, export, import) through the commands and
-// tools that use it, until it moves to a module of its own (roadmap phase 2).
+// tools that use it. logic.test.ts tests hooks/notes.ts directly.
 
 /** A file's name: the plugin writes `NOTES.md`, which the engine resolves to an absolute path. */
 const name = (path: string) => path.replace(/\\/g, '/').split('/').pop()!

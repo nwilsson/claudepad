@@ -29,7 +29,8 @@ or more).
 
 ## Phase 2: performance groundwork (M)
 
-- [ ] Extract `parseMarkdown`, `matches`, `tagsOf`, the import merge, and the sort into `hooks/notes.ts` with no UI imports. This also shrinks `hooks/register.tsx`.
+- [x] Extract `parseMarkdown`, `matches`, `tagsOf`, the import merge, and the sort into `hooks/notes.ts` with no UI imports. This also shrinks `hooks/register.tsx`.
+  - `hooks/notes.ts` also holds the text and Markdown formats, the status text and the small helpers; `register.tsx` went from 891 to about 740 lines. The import merge is `mergeImport`, which returns the list and its counts. `tests/logic.test.ts` tests the module directly. Import it as `./notes`: tsc refuses a `.ts` extension.
 - [ ] Store tags on each note at write time instead of re-parsing on every render.
 - [ ] Post the editor draft on save, mode switch, or a 300 ms debounce, not on every keystroke.
 - [ ] Replace the O(n·m) `findIndex` in import with a key `Map`.
