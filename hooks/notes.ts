@@ -1,7 +1,7 @@
 // The notes logic, with no engine or UI: tags, search, folders, ordering,
 // the text and Markdown formats, and the NOTES.md import merge.
 
-import type { Note, Scope } from '../types'
+import type { Branches, Note, Scope } from '../types'
 
 /** A tag is `#` then letters, digits, `_` or `-`, at the start or after a space. */
 export const TAG = /(^|\s)#([\p{L}\p{N}_-]+)/gu
@@ -52,6 +52,58 @@ export const isGlobal = (note: Note) => note.project == null
 export const isHere = (note: Note, project: string) => note.project === project
 
 export const isArchived = (note: Note) => note.archivedAt != null
+
+/** No repository, or no branches read yet: no branch is checked out, and none exists. */
+export const NO_BRANCHES: Branches = { current: null, all: [] }
+
+/** The command whose output `parseBranches` reads. */
+export const BRANCH_COMMAND = ['git', 'branch', '--format=%(HEAD)%(refname:short)'] as const
+
+/**
+ * Reads `git branch --format=%(HEAD)%(refname:short)`: a line per local
+ * branch, the checked-out one starting with `*`. A detached HEAD's line,
+ * `*(HEAD detached at …)`, is no branch, so none is current then.
+ */
+export const parseBranches = (stdout: string): Branches => {
+  let current: string | null = null
+  const all: string[] = []
+  for (const line of stdout.split(/\r?\n/)) {
+    const name = line.slice(1).trim()
+    if (name === '' || name.startsWith('(')) continue
+    all.push(name)
+    if (line.startsWith('*')) current = name
+  }
+  return { current, all }
+}
+
+/** Whether two reads of the branches agree. */
+export const sameBranches = (a: Branches, b: Branches) =>
+  a.current === b.current && a.all.length === b.all.length && a.all.every((name, i) => name === b.all[i])
+
+/**
+ * A note of this project's that belongs to another branch, one that still
+ * exists: left out of the lists, counts, context and export until that branch
+ * is checked out. A search still finds it.
+ */
+export const isOffBranch = (note: Note, project: string, branches: Branches) =>
+  isHere(note, project) &&
+  note.branch !== undefined &&
+  note.branch !== branches.current &&
+  branches.all.includes(note.branch)
+
+/** A branch note whose branch no longer exists (merged and deleted, say): listed with the project's again. */
+export const isBranchGone = (note: Note, branches: Branches) =>
+  note.branch !== undefined && !branches.all.includes(note.branch)
+
+/** The notes this project shows on its current branch: all but the other branches' (see isOffBranch). */
+export const onBranch = (list: readonly Note[], project: string, branches: Branches) =>
+  list.filter(note => !isOffBranch(note, project, branches))
+
+/** ` 🌿 name` for a branch note, with `(gone)` once a branch of this project no longer exists. */
+export const branchMark = (note: Note, project: string, branches: Branches) =>
+  note.branch === undefined
+    ? ''
+    : ` 🌿 ${note.branch}${isHere(note, project) && isBranchGone(note, branches) ? ' (gone)' : ''}`
 
 /** The notes not archived: what every list, count and export shows. */
 export const live = (list: readonly Note[]) => list.filter(note => !isArchived(note))
@@ -282,18 +334,21 @@ export const exportOrder = (list: readonly Note[]) =>
       a.createdAt - b.createdAt,
   )
 
+const NOTE_FLAG = /^\s*(-g|--global|-b|--branch|--last)(?=\s|$)/
+
 /**
- * `/note [-g | --global] [--last] [text]`, flags in any order before the
- * text: -g makes a global note, --last saves Claude's last reply (with the
+ * `/note [-g | --global | -b | --branch] [--last] [text]`, flags in any order
+ * before the text: -g makes a global note, -b a note of the current branch
+ * (the later of the two wins), --last saves Claude's last reply (with the
  * text, if any, as its first line).
  */
 export const parseNoteArgs = (args: string): { text: string; where: Scope; isLast: boolean } => {
   let rest = args
   let where: Scope = 'project'
   let isLast = false
-  for (let flag = /^\s*(-g|--global|--last)(?=\s|$)/.exec(rest); flag; flag = /^\s*(-g|--global|--last)(?=\s|$)/.exec(rest)) {
+  for (let flag = NOTE_FLAG.exec(rest); flag; flag = NOTE_FLAG.exec(rest)) {
     if (flag[1] === '--last') isLast = true
-    else where = 'global'
+    else where = flag[1] === '-b' || flag[1] === '--branch' ? 'branch' : 'global'
     rest = rest.slice(flag[0].length)
   }
   return { text: rest.trim(), where, isLast }
@@ -305,30 +360,41 @@ const dueMark = (note: Note, today: string | undefined) => {
   return due === undefined || due > today! ? '' : due === today ? ' (due today)' : ' (overdue)'
 }
 
-/**
- * One line per note (more for a multi-line one): marked overdue or due today
- * when `today` is given, and ending in its id when `withIds`.
- */
-const lines = (list: readonly Note[], withIds: boolean, today?: string) =>
-  list
-    .map(
-      note =>
-        `- [${note.isDone ? 'x' : ' '}]${note.isPinned ? ' (pinned)' : ''} ${indented(note.text, '      ')}` +
-        dueMark(note, today) +
-        (withIds ? ` (id: ${note.id})` : ''),
-    )
-    .join('\n')
+export type TextOptions = {
+  /** Words to search every note for; empty lists this project's and the global notes. */
+  search?: string
+  /** Ends each note's line with its id, which complete_note and update_note take (for Claude's tools). */
+  withIds?: boolean
+  /**
+   * The local date, YYYY-MM-DD: marks open notes overdue or due today and,
+   * when a listed note has a due date, ends the text with it, so a reader
+   * without a calendar can still judge the others.
+   */
+  today?: string
+  /** The project's branches: which notes the listing leaves out, and which branches are gone. */
+  branches?: Branches
+}
 
 /**
- * The notes as /notes find and list_notes give them: this project's and
- * global, or a search over all. `withIds` (for Claude's tools) adds each
- * note's id, which complete_note and update_note take. `today` (YYYY-MM-DD,
- * local) marks open notes overdue or due today and, when a listed note has a
- * due date, ends the text with the date, so a reader without a calendar can
- * still judge the others.
+ * The notes as /notes find and list_notes give them: this project's (those
+ * of other branches left out) and global, or a search over all.
  */
-export const asText = (all: readonly Note[], project: string, search = '', withIds = false, today?: string) => {
+export const asText = (all: readonly Note[], project: string, options: TextOptions = {}) => {
+  const { search = '', withIds = false, today, branches = NO_BRANCHES } = options
   const list = live(all)
+  // One line per note (more for a multi-line one), with its marks.
+  const lines = (shown: readonly Note[]) =>
+    shown
+      .map(
+        note =>
+          `- [${note.isDone ? 'x' : ' '}]${note.isPinned ? ' (pinned)' : ''} ${indented(note.text, '      ')}` +
+          dueMark(note, today) +
+          (note.branch === undefined
+            ? ''
+            : ` (branch ${note.branch}${isHere(note, project) && isBranchGone(note, branches) ? ', since deleted' : ''})`) +
+          (withIds ? ` (id: ${note.id})` : ''),
+      )
+      .join('\n')
   const dated = (shown: readonly Note[]) =>
     today !== undefined && shown.some(note => dueOf(note.text) !== undefined) ? ['', `Today is ${today}.`] : []
   if (search.trim() !== '') {
@@ -340,19 +406,19 @@ export const asText = (all: readonly Note[], project: string, search = '', withI
           `${plural(found.length, 'note')} matching "${search.trim()}":`,
           ...found.map(note => {
             const where = isGlobal(note) ? 'global' : isHere(note, project) ? 'this project' : baseName(note.project ?? '')
-            return `${lines([note], withIds, today)} (${where})`
+            return `${lines([note])} (${where})`
           }),
           ...dated(found),
         ].join('\n')
   }
-  const here = list.filter(note => isHere(note, project))
+  const here = onBranch(list, project, branches).filter(note => isHere(note, project))
   const global = list.filter(isGlobal)
   return [
-    `Notes for this project (${baseName(project)}):`,
-    here.length ? lines(here, withIds, today) : '(none)',
+    `Notes for this project (${baseName(project)}${branches.current === null ? '' : `, on branch ${branches.current}`}):`,
+    here.length ? lines(here) : '(none)',
     '',
     'Global notes:',
-    global.length ? lines(global, withIds, today) : '(none)',
+    global.length ? lines(global) : '(none)',
     '',
     `Tags in use: ${tagCounts(list).map(([tag, n]) => `#${tag} (${n})`).join(', ') || '(none)'}`,
     ...dated([...here, ...global]),
@@ -363,9 +429,16 @@ export const EXPORT_FILE = 'NOTES.md'
 /** First line of every export, so a later export knows the file is ours to replace. */
 export const EXPORT_MARK = '<!-- exported by the claudepad mod for Claude Code; re-exporting replaces this file -->'
 
-/** This project's and the global notes as a NOTES.md, dated `now`. */
-export const toMarkdown = (all: readonly Note[], project: string, now = Date.now()) => {
-  const list = live(all)
+/** A heading that starts with this holds a branch's notes: `## 🌿 name`. */
+const BRANCH_MARK = '🌿'
+
+/**
+ * This project's and the global notes as a NOTES.md, dated `now`. The notes
+ * of the current branch, and of any branch since deleted, each get a section
+ * of their own; other branches' notes are left out.
+ */
+export const toMarkdown = (all: readonly Note[], project: string, now = Date.now(), branches = NO_BRANCHES) => {
+  const list = onBranch(live(all), project, branches)
   // A multi-line note: its first line on the checkbox, the rest indented two
   // spaces beneath (a blank line inside it as two spaces, so it stays inside).
   const item = (note: Note) => {
@@ -385,38 +458,49 @@ export const toMarkdown = (all: readonly Note[], project: string, now = Date.now
   const here = list.filter(note => isHere(note, project))
   const global = list.filter(isGlobal)
   const tags = tagCounts([...here, ...global])
+  // The current branch first, then any gone ones by name.
+  const named = [...new Set(here.flatMap(note => (note.branch === undefined ? [] : [note.branch])))].sort(
+    (a, b) => Number(b === branches.current) - Number(a === branches.current) || a.localeCompare(b),
+  )
   return [
     EXPORT_MARK,
     `# Notes: ${baseName(project)}`,
     '',
     `_Exported ${new Date(now).toISOString().slice(0, 10)}. ${plural(here.length, 'project note')}, ${plural(global.length, 'global note')}._`,
     '',
-    ...section(baseName(project), here),
+    ...section(baseName(project), here.filter(note => note.branch === undefined)),
+    ...named.flatMap(name => section(`${BRANCH_MARK} ${name}`, here.filter(note => note.branch === name))),
     ...section('Global', global),
     ...(tags.length ? ['## Tags', '', tags.map(([tag, n]) => `\`#${tag}\` (${n})`).join(' · '), ''] : []),
   ].join('\n')
 }
 
-export type ParsedNote = Pick<Note, 'text' | 'isDone' | 'isPinned' | 'author'> & { where: Scope }
+export type ParsedNote = Pick<Note, 'text' | 'isDone' | 'isPinned' | 'author' | 'branch'> & {
+  where: 'project' | 'global'
+}
 
 /**
  * Reads the notes out of a NOTES.md: every `- [ ]`/`- [x]` checkbox and every
- * plain `-`/`*` bullet. Items under a `## Global` heading are global, all
- * others belong to the project; a `## Tags` section is skipped. Understands
- * the export's 📌 and "(added by Claude)" marks, and any hand-written list.
+ * plain `-`/`*` bullet. Items under a `## Global` heading are global, under a
+ * `## 🌿 name` heading the project's on that branch, all others the
+ * project's; a `## Tags` section is skipped. Understands the export's 📌 and
+ * "(added by Claude)" marks, and any hand-written list.
  */
 export const parseMarkdown = (markdown: string): ParsedNote[] => {
   const found: ParsedNote[] = []
-  let where: Scope = 'project'
+  let where: ParsedNote['where'] = 'project'
+  let branch: string | undefined
   let isSkipped = false
   // The item an indented, non-bullet line continues (a multi-line note).
   let current: ParsedNote | null = null
   for (const raw of markdown.split(/\r?\n/)) {
     const heading = /^#{2,6}\s+(.*)$/.exec(raw)
     if (heading) {
-      const title = heading[1]!.trim().toLowerCase().replace(/^[^\p{L}\p{N}]+/u, '')
+      const text = heading[1]!.trim()
+      const title = text.toLowerCase().replace(/^[^\p{L}\p{N}]+/u, '')
       isSkipped = title === 'tags'
       where = title === 'global' ? 'global' : 'project'
+      branch = text.startsWith(BRANCH_MARK) ? text.slice(BRANCH_MARK.length).trim() || undefined : undefined
       current = null
       continue
     }
@@ -446,6 +530,7 @@ export const parseMarkdown = (markdown: string): ParsedNote[] => {
       isPinned,
       author: byClaude ? 'claude' : 'you',
       where,
+      ...(branch === undefined ? {} : { branch }),
     }
     found.push(current)
   }
@@ -455,15 +540,17 @@ export const parseMarkdown = (markdown: string): ParsedNote[] => {
 /** Text as import compares it, so spacing and case changes still match a note. */
 const looseText = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase()
 
-/** A note's scope and loose text, as one key; loose text never holds a newline. */
-const importKey = (where: Scope, text: string) => `${where}\n${looseText(text)}`
+/** A note's scope, branch and loose text, as one key; neither loose text nor a branch name holds a newline. */
+const importKey = (where: ParsedNote['where'], branch: string | undefined, text: string) =>
+  `${where}\n${branch ?? ''}\n${looseText(text)}`
 
 /**
  * The notes after importing `parsed` into `project`. By default it merges: a
- * note already here (same text and scope) takes the file's done and pinned
- * marks, a new one is added, and nothing is deleted. With `replace`, this
- * project's and the global notes become exactly the file's. New notes are
- * dated from `now`, one millisecond apart, in the file's order.
+ * note already here (same text, scope and branch) takes the file's done and
+ * pinned marks, a new one is added, and nothing is deleted. With `replace`,
+ * this project's and the global notes become exactly the file's, except the
+ * notes of other branches (see isOffBranch), which the file cannot hold. New
+ * notes are dated from `now`, one millisecond apart, in the file's order.
  */
 export const mergeImport = (
   all: readonly Note[],
@@ -471,22 +558,25 @@ export const mergeImport = (
   project: string,
   replace: boolean,
   now: number,
+  branches = NO_BRANCHES,
 ) => {
-  const kept = replace ? all.filter(note => !(isGlobal(note) || isHere(note, project))) : all
+  const kept = replace
+    ? all.filter(note => !(isGlobal(note) || isHere(note, project)) || isOffBranch(note, project, branches))
+    : all
   const list = [...kept]
   // Where each of this project's and the global notes stands, by key; the
   // first of two alike wins. A note the file adds joins it, so a line the
   // file repeats matches that note.
   const at = new Map<string, number>()
   list.forEach((note, i) => {
-    const where: Scope | null = isGlobal(note) ? 'global' : isHere(note, project) ? 'project' : null
-    const key = where && importKey(where, note.text)
+    const where = isGlobal(note) ? 'global' : isHere(note, project) ? 'project' : null
+    const key = where && importKey(where, note.branch, note.text)
     if (key && !at.has(key)) at.set(key, i)
   })
   let added = 0
   let updated = 0
   parsed.forEach((item, i) => {
-    const key = importKey(item.where, item.text)
+    const key = importKey(item.where, item.where === 'global' ? undefined : item.branch, item.text)
     const index = replace ? undefined : at.get(key)
     const match = index === undefined ? undefined : list[index]
     if (index !== undefined && match) {
@@ -508,6 +598,7 @@ export const mergeImport = (
         author: item.author,
         createdAt: now + i,
         project: item.where === 'global' ? null : project,
+        ...(item.where === 'global' || item.branch === undefined ? {} : { branch: item.branch }),
       }),
     )
     added += 1

@@ -61,7 +61,11 @@ or more).
 
 - [ ] Watch `NOTES.md` for outside edits and re-import.
 - [ ] Make the store path configurable, so notes can live in a git-tracked folder across machines.
-- [ ] Branch-scoped notes.
+- [x] Branch-scoped notes.
+  - A project note can carry `branch`, under the same store key. `git branch --format=%(HEAD)%(refname:short)` gives the current branch and every local one in one run (`parseBranches`); it runs at `session.start`, on a directory change, when `/notes` opens the pane, before each prompt (a switch in another terminal), and after a tool batch with a Bash or PowerShell call. A failed run, no git, or a detached HEAD is no branch. `$.session.repo()` has no branch, and watching `.git/HEAD` would need `watchPaths` from a classic SessionStart, so it is not done: an outside switch shows at the next prompt.
+  - Another branch's notes, while that branch exists, are left out of the lists, the status line, overdue, pinned context, `list_notes` and export (`isOffBranch`, `onBranch`); a search finds them, under **🗂 Other projects and branches**. A deleted branch's notes list with the project's again, marked `(gone)` (Claude sees `since deleted`), so merging a branch never strands its notes. Outside a repository every branch counts as gone.
+  - Adding: **Add to: ○ 🌿 branch** in the pane (shown on a branch), `/note -b`, and `add_note`'s `branch: true`, each falling back to a project note with no branch checked out. A row's **→ 🌿 name** puts a project note on the branch, **→ whole project** takes it off; a branch note has no **→ global**.
+  - `NOTES.md`: each branch exported gets a `## 🌿 name` section, read back onto that branch; the branch is part of the import's match, and `--replace` keeps other branches' notes, which the file cannot hold.
 - [ ] Templates with variables, sent through the existing → prompt button.
 - [x] Archive instead of delete, and a completed-by-week view.
   - Notes carry `doneAt` (set on done, cleared on reopen; `withDone()`) and `archivedAt`. **archive** replaces **delete**, and **clear done** archives every done note here and global in one go; both offer undo in the pane for 5 s and with `/notes undo` (which now restores a whole **clear done**). Archived notes are left out of the lists, search, the status line, overdue, pinned context, `list_notes` and export; an import that matches one leaves it archived, so an old file cannot bring it back.

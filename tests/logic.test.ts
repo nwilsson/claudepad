@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   asText,
+  branchMark,
   doneByWeek,
   dueOf,
   editorCommand,
@@ -14,7 +15,9 @@ import {
   migrate,
   overdue,
   normalize,
+  onBranch,
   paneOrder,
+  parseBranches,
   parseMarkdown,
   parseNoteArgs,
   matches,
@@ -163,6 +166,10 @@ test('small helpers: folder spelling, /note flags, previews', () => {
   expect(parseNoteArgs('-g --last')).toEqual({ text: '', where: 'global', isLast: true })
   // Flags count only before the text.
   expect(parseNoteArgs('see --last -g')).toEqual({ text: 'see --last -g', where: 'project', isLast: false })
+  // -b is the branch; the later of -g and -b wins.
+  expect(parseNoteArgs('-b fix it')).toEqual({ text: 'fix it', where: 'branch', isLast: false })
+  expect(parseNoteArgs('--branch --last')).toEqual({ text: '', where: 'branch', isLast: true })
+  expect(parseNoteArgs('-b -g x')).toEqual({ text: 'x', where: 'global', isLast: false })
   expect(preview('first\nsecond')).toBe('first')
   expect(preview('x'.repeat(61))).toBe(`${'x'.repeat(59)}…`)
 })
@@ -233,7 +240,7 @@ test('the listing marks open notes overdue or due today, and ends with the date 
     note('done late #due:2026-10-01', { isDone: true }),
     note('global late #due:2026-10-01', { project: null }),
   ]
-  expect(asText(list, '/work/demo', '', false, '2026-10-12').split('\n')).toEqual([
+  expect(asText(list, '/work/demo', { today: '2026-10-12' }).split('\n')).toEqual([
     'Notes for this project (demo):',
     '- [ ] late #due:2026-10-10 (overdue)',
     '- [ ] today #due:2026-10-12 (due today)',
@@ -248,7 +255,7 @@ test('the listing marks open notes overdue or due today, and ends with the date 
     'Today is 2026-10-12.',
   ])
   // The mark comes before the id, and a search marks and dates too.
-  expect(asText(list, '/work/demo', 'late', true, '2026-10-12').split('\n')).toEqual([
+  expect(asText(list, '/work/demo', { search: 'late', withIds: true, today: '2026-10-12' }).split('\n')).toEqual([
     '4 notes matching "late":',
     '- [ ] late #due:2026-10-10 (overdue) (id: late #due:2026-10-10) (this project)',
     '- [ ] later #due:2026-10-30 (id: later #due:2026-10-30) (this project)',
@@ -259,7 +266,7 @@ test('the listing marks open notes overdue or due today, and ends with the date 
   ])
   // With no date given, nothing is marked; with no dated note listed, no date is added.
   expect(asText(list, '/work/demo')).not.toContain('(overdue)')
-  expect(asText([note('plain')], '/work/demo', '', false, '2026-10-12')).not.toContain('Today is')
+  expect(asText([note('plain')], '/work/demo', { today: '2026-10-12' })).not.toContain('Today is')
 })
 
 test('a file reference is a path with an extension, then :line and maybe :column', () => {
@@ -319,4 +326,81 @@ test('archived notes stay out of lists, counts and export, and an import leaves 
   const merged = mergeImport(list, parseMarkdown('- [ ] shelved #b\n'), '/work/demo', false, 0)
   expect([merged.added, merged.updated]).toEqual([0, 0])
   expect(merged.list[1]).toEqual(list[1])
+})
+
+test('git branch output: the starred line is current, a detached HEAD is none', () => {
+  expect(parseBranches('*main\n feature/login\r\n old\n')).toEqual({ current: 'main', all: ['main', 'feature/login', 'old'] })
+  expect(parseBranches('*(HEAD detached at 1a2b3c4)\n main\n')).toEqual({ current: null, all: ['main'] })
+  expect(parseBranches('')).toEqual({ current: null, all: [] })
+})
+
+test('other branches are left out until checked out, and come back once their branch is gone', () => {
+  const branches = { current: 'feat', all: ['main', 'feat', 'other'] }
+  const list = [
+    note('whole project'),
+    note('on feat', { branch: 'feat' }),
+    note('on other #due:2026-10-01', { branch: 'other' }),
+    note('on deleted', { branch: 'deleted' }),
+    note('another project, other branch', { project: '/work/x', branch: 'other' }),
+  ]
+  expect(onBranch(list, '/work/demo', branches).map(n => n.text)).toEqual([
+    'whole project',
+    'on feat',
+    'on deleted',
+    'another project, other branch',
+  ])
+  expect(branchMark(list[1]!, '/work/demo', branches)).toBe(' 🌿 feat')
+  expect(branchMark(list[3]!, '/work/demo', branches)).toBe(' 🌿 deleted (gone)')
+  expect(branchMark(list[0]!, '/work/demo', branches)).toBe('')
+  // Another project's branches are not known, so its notes are never called gone.
+  expect(branchMark(list[4]!, '/work/demo', branches)).toBe(' 🌿 other')
+  // The other branch's note does not count, and its overdue date does not either.
+  expect(statusFor(onBranch(list, '/work/demo', branches), '/work/demo', '2026-10-12')).toBe('📝 3 here · 0 global')
+  // Outside a repository every branch is gone: nothing is hidden.
+  expect(onBranch(list, '/work/demo', { current: null, all: [] })).toHaveLength(5)
+})
+
+test('the listing names the branch, leaves out other branches, and a search still finds them', () => {
+  const branches = { current: 'feat', all: ['main', 'feat', 'other'] }
+  const list = [note('fix it'), note('fix feat', { branch: 'feat' }), note('fix other', { branch: 'other' }), note('fix gone', { branch: 'gone' })]
+  expect(asText(list, '/work/demo', { branches }).split('\n').slice(0, 4)).toEqual([
+    'Notes for this project (demo, on branch feat):',
+    '- [ ] fix it',
+    '- [ ] fix feat (branch feat)',
+    '- [ ] fix gone (branch gone, since deleted)',
+  ])
+  expect(asText(list, '/work/demo', { branches, search: 'other' })).toBe(
+    '1 note matching "other":\n- [ ] fix other (branch other) (this project)',
+  )
+})
+
+test('branch notes export under their own heading and import back onto their branch', () => {
+  const branches = { current: 'feat', all: ['main', 'feat', 'other'] }
+  const list = [
+    note('whole', { createdAt: 1 }),
+    note('feat work', { branch: 'feat', createdAt: 2 }),
+    note('other work', { branch: 'other', createdAt: 3 }),
+    note('zombie', { branch: 'deleted', createdAt: 4 }),
+  ]
+  const markdown = toMarkdown(list, '/work/demo', 0, branches)
+  expect(markdown).toContain('## demo\n\n- [ ] whole\n\n## 🌿 feat\n\n- [ ] feat work\n\n## 🌿 deleted\n\n- [ ] zombie\n\n## Global')
+  expect(markdown).not.toContain('other work')
+
+  const parsed = parseMarkdown(markdown)
+  expect(parsed.map(item => [item.text, item.branch])).toEqual([
+    ['whole', undefined],
+    ['feat work', 'feat'],
+    ['zombie', 'deleted'],
+  ])
+  // Back unchanged: the branch is part of the match.
+  const merged = mergeImport(list, parsed, '/work/demo', false, 10, branches)
+  expect([merged.added, merged.updated]).toEqual([0, 0])
+  // The same text on another branch is a different note.
+  const elsewhere = mergeImport(list, parseMarkdown('## 🌿 main\n- [ ] whole\n'), '/work/demo', false, 10, branches)
+  expect(elsewhere.added).toBe(1)
+  expect(elsewhere.list.at(-1)).toMatchObject({ text: 'whole', branch: 'main', project: '/work/demo' })
+  // --replace swaps what the file could hold, and keeps the other branch's note.
+  const replaced = mergeImport(list, parseMarkdown('- [ ] fresh\n'), '/work/demo', true, 10, branches)
+  expect(replaced.list.map(n => n.text)).toEqual(['other work', 'fresh'])
+  expect(replaced.removed).toBe(3)
 })

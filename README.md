@@ -14,13 +14,18 @@ mod's own store under your Claude Code config folder.
 ## What it does
 
 - **A pane, one command away.** `/notes` opens or closes it. `/note <text>`
-  adds a quick note, `/note -g <text>` a global one, and a bare `/note`
-  opens the multi-line editor. `/note --last [text]` saves Claude's last
+  adds a quick note, `/note -g <text>` a global one, `/note -b <text>` one
+  for the current git branch, and a bare `/note` opens the multi-line editor. `/note --last [text]` saves Claude's last
   reply as a note (your text, such as tags, as its first line); the pane
   has a button for it too.
 - **Per-project and global notes.** Project notes are tied to the session's
   folder, so each repo keeps its own list. Global notes follow you
   everywhere.
+- **Branch notes.** A note can belong to a git branch (🌿 in the pane):
+  it is listed only while that branch is checked out, and a search still
+  finds it from any other. Once the branch is deleted, its notes join the
+  project's list again, marked **(gone)**. The branch is read again before
+  each prompt and after Claude runs a shell command.
 - **Done, pin, edit, move, archive.** One button each on every note, and
   **clear done** at the bottom archives every finished one. An archive can
   be undone from the pane for 5 seconds, and with `/notes undo` after that.

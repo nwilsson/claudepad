@@ -5,13 +5,16 @@ import type { ArchiveUndo, EditorSession, Note, Scope } from '../types'
 import type { Editor, FileLink } from './notes'
 import {
   EDITORS,
+  BRANCH_COMMAND,
   EXPORT_FILE,
   EXPORT_MARK,
   GLOBAL_KEY,
   LEGACY_KEY,
+  NO_BRANCHES,
   TAG,
   asText,
   baseName,
+  branchMark,
   doneByWeek,
   dueOf,
   editorCommand,
@@ -21,6 +24,7 @@ import {
   isHere,
   isArchived,
   isNotesKey,
+  isOffBranch,
   keyOf,
   keyOfProject,
   linksOf,
@@ -31,13 +35,16 @@ import {
   migrate,
   newId,
   normalize,
+  onBranch,
   overdue,
   paneOrder,
+  parseBranches,
   parseMarkdown,
   parseNoteArgs,
   plural,
   preview,
   resolvePath,
+  sameBranches,
   statusFor,
   tagCounts,
   tagged,
@@ -52,6 +59,8 @@ const ADD_TOOL = 'mcp__claudepad__add_note'
 const LIST_TOOL = 'mcp__claudepad__list_notes'
 const COMPLETE_TOOL = 'mcp__claudepad__complete_note'
 const UPDATE_TOOL = 'mcp__claudepad__update_note'
+/** The tools that run shell commands, any of which can switch the git branch. */
+const SHELL_TOOLS = ['Bash', 'PowerShell']
 
 const notes = atom({ plugin: 'claudepad', key: 'notes' } as const, [] as Note[])
 const editor = atom({ plugin: 'claudepad', key: 'editor' } as const, null as EditorSession | null)
@@ -67,6 +76,7 @@ const activeTag = atom({ plugin: 'claudepad', key: 'tag' } as const, null as str
 const lastArchive = atom({ plugin: 'claudepad', key: 'lastArchive' } as const, null as ArchiveUndo | null)
 const isArchiveView = atom({ plugin: 'claudepad', key: 'isArchiveView' } as const, false)
 const isByDue = atom({ plugin: 'claudepad', key: 'isByDue' } as const, false)
+const branches = atom({ plugin: 'claudepad', key: 'branches' } as const, NO_BRANCHES)
 
 /** Open pinned notes in every project, worked out again only when the notes change. */
 const pinned = derive([notes], list => live(list).filter(note => note.isPinned && !note.isDone))
@@ -87,6 +97,32 @@ const colorOf = (tag: string) => {
 }
 
 const projectOf = async ($: EngineInterface) => normalize(await $.session.cwd())
+
+/** Sets the status line from `all`, leaving out the notes of other branches. */
+const showStatus = async ($: EngineInterface, all: readonly Note[], project: string) =>
+  $.ui.status(statusFor(onBranch(all, project, await read($, branches)), project, localDate(Date.now())))
+
+/**
+ * Reads the session folder's git branches again; resolves true when they
+ * changed. Not a repository, or no git, is no branches.
+ */
+const readBranches = async ($: EngineInterface) => {
+  let found = NO_BRANCHES
+  try {
+    const { exitCode, stdout } = await $.process.run(BRANCH_COMMAND, { timeoutMs: 5000 })
+    if (exitCode === 0) found = parseBranches(stdout)
+  } catch {
+    // git missing or too slow: as outside a repository.
+  }
+  if (sameBranches(found, await read($, branches))) return false
+  await update($, branches, () => found)
+  return true
+}
+
+/** Reads the branches again and, when they changed, recounts the status line. */
+const refreshBranches = async ($: EngineInterface) => {
+  if (await readBranches($)) await showStatus($, await read($, notes), await projectOf($))
+}
 
 /** The saved notes, each with its tags (a note saved before tags were stored gets them here). */
 const fromStore = (saved: unknown) =>
@@ -112,7 +148,7 @@ const reload = async ($: EngineInterface, project: string) => {
   }
   const all = [...byKey.values()].flat()
   await update($, notes, () => all)
-  $.ui.status(statusFor(all, project, localDate(Date.now())))
+  await showStatus($, all, project)
 }
 
 /**
@@ -140,7 +176,7 @@ const change = async ($: EngineInterface, keys: readonly string[], fn: (list: No
     ...current.filter(note => !touched.includes(keyOf(note))),
     ...written,
   ])
-  $.ui.status(statusFor(all, await projectOf($), localDate(Date.now())))
+  await showStatus($, all, await projectOf($))
   return written
 }
 
@@ -199,6 +235,21 @@ const purgeNote = async ($: EngineInterface, id: string) => {
   await update($, lastArchive, last => (last ? { ...last, noteIds: last.noteIds.filter(other => other !== id) } : last))
 }
 
+/** Where a note in `where` goes: a branch note only while a branch is checked out, else the project's. */
+const placeOf = async ($: EngineInterface, where: Scope) => {
+  if (where === 'global') return { project: null }
+  const project = await projectOf($)
+  const branch = where === 'branch' ? (await read($, branches)).current : null
+  return branch === null ? { project } : { project, branch }
+}
+
+/** What a note's place is called: `global`, the project's folder name, or that and its branch. */
+const placeName = (note: Note) =>
+  isGlobal(note) ? 'global' : `${baseName(note.project ?? '')}${note.branch === undefined ? '' : ` 🌿 ${note.branch}`}`
+
+/** What kind of note it is: `global`, `project`, or its branch. */
+const kindOf = (note: Note) => (isGlobal(note) ? 'global' : note.branch === undefined ? 'project' : `🌿 ${note.branch}`)
+
 const addNote = async ($: EngineInterface, text: string, author: Note['author'], where: Scope) => {
   const note = tagged({
     id: newId(),
@@ -207,7 +258,7 @@ const addNote = async ($: EngineInterface, text: string, author: Note['author'],
     isPinned: false,
     author,
     createdAt: Date.now(),
-    project: where === 'global' ? null : await projectOf($),
+    ...(await placeOf($, where)),
   })
   await change($, [keyOf(note)], list => [...list, note])
   return note
@@ -221,8 +272,8 @@ const saveLastReply = async ($: EngineInterface, text: string, where: Scope) => 
   const rows = await $.session.messages()
   const reply = rows.findLast(row => row.role === 'assistant' && row.text.trim() !== '')?.text.trim()
   if (reply === undefined) return 'No reply from Claude yet to save.'
-  await addNote($, text === '' ? reply : `${text}\n\n${reply}`, 'you', where)
-  return `📝 Saved Claude's last reply as a ${where === 'global' ? 'global' : 'project'} note: ${preview(reply)}`
+  const note = await addNote($, text === '' ? reply : `${text}\n\n${reply}`, 'you', where)
+  return `📝 Saved Claude's last reply as a ${kindOf(note)} note: ${preview(reply)}`
 }
 
 /**
@@ -259,7 +310,7 @@ const exportNotes = async ($: EngineInterface, force: boolean) => {
     }
   }
   const project = await projectOf($)
-  await $.fs.write(EXPORT_FILE, toMarkdown(await read($, notes), project))
+  await $.fs.write(EXPORT_FILE, toMarkdown(await read($, notes), project, Date.now(), await read($, branches)))
   return { isWritten: true, message: `📝 Exported notes to ${EXPORT_FILE} in ${baseName(project)}.` }
 }
 
@@ -274,9 +325,10 @@ const importNotes = async ($: EngineInterface, replace: boolean) => {
     return `${EXPORT_FILE} has no list items to import (notes are lines starting with "- ").`
   }
   const project = await projectOf($)
+  const known = await read($, branches)
   let counts = { added: 0, updated: 0, removed: 0 }
   await change($, [keyOfProject(project), GLOBAL_KEY], all => {
-    const { list, ...merged } = mergeImport(all, parsed, project, replace, Date.now())
+    const { list, ...merged } = mergeImport(all, parsed, project, replace, Date.now(), known)
     counts = merged
     return list
   })
@@ -326,15 +378,17 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const project = await projectOf($)
     await update($, folder, () => project)
+    await readBranches($)
     await reload($, project)
-    // Overdue notes, here and global, are the first thing the session shows.
-    const late = overdue(await read($, notes), project, localDate(Date.now()))
+    // Overdue notes, here (on this branch) and global, are the first thing the session shows.
+    const shown = onBranch(await read($, notes), project, await read($, branches))
+    const late = overdue(shown, project, localDate(Date.now()))
     if (late.length === 1) {
       $.ui.toast(`⏰ Overdue: ${preview(late[0]!.text)}`, { timeoutMs: 8000 })
     } else if (late.length > 1) {
       const more = late.length > 3 ? ` · and ${late.length - 3} more` : ''
-      const shown = late.slice(0, 3).map(note => preview(note.text))
-      $.ui.toast(`⏰ ${late.length} overdue notes: ${shown.join(' · ')}${more}`, { timeoutMs: 8000 })
+      const named = late.slice(0, 3).map(note => preview(note.text))
+      $.ui.toast(`⏰ ${late.length} overdue notes: ${named.join(' · ')}${more}`, { timeoutMs: 8000 })
     }
 
     await $.command.register({
@@ -346,8 +400,8 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'note',
       description:
-        "Add a note for this project (-g for a global note, #words become tags; --last saves Claude's last reply)",
-      argumentHint: '[-g] [--last] <text>',
+        "Add a note for this project (-g for a global note, -b for the current git branch only, #words become tags; --last saves Claude's last reply)",
+      argumentHint: '[-g | -b] [--last] <text>',
       immediate: true,
     })
     await $.tool.register({
@@ -362,6 +416,11 @@ export const register: Register = (on, options) => {
             type: 'boolean',
             description: 'True for a note not tied to this project. Default false.',
           },
+          branch: {
+            type: 'boolean',
+            description:
+              "True for a note about the work on the current git branch only: it is listed while that branch is checked out, and with the project's notes again once the branch is deleted. Default false.",
+          },
         },
         required: ['text'],
       },
@@ -369,7 +428,7 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'list_notes',
       description:
-        "List the notes in the user's notepad: this project's notes and the global ones, with whether each is done or pinned, and each note's id (for complete_note and update_note). A note with a #due:YYYY-MM-DD date is marked (overdue) or (due today) while open, and a list with dated notes ends with today's date. With `query`, search every note (all projects) for notes containing all of its words; a #word in the query matches that tag exactly. Also lists the tags in use.",
+        "List the notes in the user's notepad: this project's notes and the global ones, with whether each is done or pinned, and each note's id (for complete_note and update_note). Notes of another git branch of this project are left out until it is checked out; a note marked (branch name) belongs to that branch. A note with a #due:YYYY-MM-DD date is marked (overdue) or (due today) while open, and a list with dated notes ends with today's date. With `query`, search every note (all projects) for notes containing all of its words; a #word in the query matches that tag exactly. Also lists the tags in use.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -415,7 +474,14 @@ export const register: Register = (on, options) => {
   on('classic.CwdChanged', async ($, e, next) => {
     const project = normalize(e.new_cwd)
     await update($, folder, () => project)
+    await readBranches($)
     await reload($, project)
+    return next(e)
+  })
+
+  // A shell command may have switched, made or deleted a branch: read them again.
+  on('classic.PostToolBatch', async ($, e, next) => {
+    if (e.tool_calls.some(call => SHELL_TOOLS.includes(call.tool_name))) await refreshBranches($)
     return next(e)
   })
 
@@ -428,7 +494,13 @@ export const register: Register = (on, options) => {
         return { text: 'Usage: /notes find <text>' }
       }
       await update($, query, () => text)
-      return { text: asText(await read($, notes), await projectOf($), text, false, localDate(Date.now())) }
+      return {
+        text: asText(await read($, notes), await projectOf($), {
+          search: text,
+          today: localDate(Date.now()),
+          branches: await read($, branches),
+        }),
+      }
     }
     const exportArgs = /^\s*export\b(.*)$/i.exec(e.args)
     if (exportArgs) {
@@ -457,6 +529,7 @@ export const register: Register = (on, options) => {
       await $.ui.close({ id: PANE })
       return { text: 'Notepad closed.' }
     }
+    await refreshBranches($)
     await openPane($)
     return { text: 'Notepad opened.' }
   })
@@ -474,49 +547,58 @@ export const register: Register = (on, options) => {
       await openPane($)
       return { text: 'Multi-line editor opened. Or add a quick note with /note <text> (-g for global).' }
     }
-    await addNote($, text, 'you', where)
-    const label = where === 'global' ? 'global' : baseName(await projectOf($))
-    return { text: `📝 Noted (${label}): ${text}` }
+    const note = await addNote($, text, 'you', where)
+    return { text: `📝 Noted (${placeName(note)}): ${text}` }
   })
 
   // Claude-aware: pinned notes (this project's and global) ride along with every prompt.
   on('prompt.submit', async ($, e, next) => {
+    // The branch may have changed outside the session since the last prompt.
+    await refreshBranches($)
     const project = await projectOf($)
-    const shown = (await read($, pinned)).filter(note => isGlobal(note) || isHere(note, project))
+    const known = await read($, branches)
+    const shown = (await read($, pinned)).filter(
+      note => (isGlobal(note) || isHere(note, project)) && !isOffBranch(note, project, known),
+    )
     if (shown.length === 0) {
       return next(e)
     }
     const block =
       "The user's pinned notes from their notepad (standing context; keep them in mind):\n" +
       shown
-        .map(note => `- ${indented(note.text, '  ')}${isGlobal(note) ? '' : ' (this project)'}`)
+        .map(
+          note =>
+            `- ${indented(note.text, '  ')}${isGlobal(note) ? '' : note.branch === undefined ? ' (this project)' : ` (this project, branch ${note.branch})`}`,
+        )
         .join('\n')
     return next({ ...e, context: [...(e.context ?? []), block] })
   })
 
   // Claude-aware: tools so Claude can write and read notes.
   on('tool.call', { tool: ADD_TOOL }, async ($, e) => {
-    const input = e as unknown as { text?: unknown; global?: unknown }
+    const input = e as unknown as { text?: unknown; global?: unknown; branch?: unknown }
     const text = String(input.text ?? '').trim()
     if (text === '') {
       return { deny: 'add_note needs non-empty text.' }
     }
-    const where: Scope = input.global === true ? 'global' : 'project'
+    const where: Scope = input.global === true ? 'global' : input.branch === true ? 'branch' : 'project'
     const note = await addNote($, text, 'claude', where)
-    $.ui.toast(`📝 Claude added a ${where === 'global' ? 'global' : 'project'} note: ${text.slice(0, 60)}`)
-    return { result: `Added to the notepad (${where}): ${text} (id: ${note.id})` }
+    $.ui.toast(`📝 Claude added a ${kindOf(note)} note: ${text.slice(0, 60)}`)
+    const place = isGlobal(note) ? 'global' : note.branch === undefined ? 'project' : `branch ${note.branch}`
+    // Asked for a branch outside one: say where it went instead.
+    const fellBack = where === 'branch' && note.branch === undefined ? '; no git branch is checked out, so it is a project note' : ''
+    return { result: `Added to the notepad (${place}${fellBack}): ${text} (id: ${note.id})` }
   })
 
   on('tool.call', { tool: LIST_TOOL }, async ($, e) => {
     const search = (e as unknown as { query?: unknown }).query
     return {
-      result: asText(
-        await read($, notes),
-        await projectOf($),
-        typeof search === 'string' ? search : '',
-        true,
-        localDate(Date.now()),
-      ),
+      result: asText(await read($, notes), await projectOf($), {
+        search: typeof search === 'string' ? search : '',
+        withIds: true,
+        today: localDate(Date.now()),
+        branches: await read($, branches),
+      }),
     }
   })
 
@@ -573,16 +655,19 @@ export const register: Register = (on, options) => {
     // Reading the atom (not just the session) redraws the pane after a directory change.
     const project = (await read($, folder)) || (await projectOf($))
     const list = await read($, notes)
-    const where = await read($, scope)
+    const known = await read($, branches)
+    // A branch note needs a branch checked out; without one it is the project's.
+    const chosen = await read($, scope)
+    const where = chosen === 'branch' && known.current === null ? 'project' : chosen
+    const placeLabel =
+      where === 'global' ? 'global' : `${baseName(project)}${where === 'branch' ? ` 🌿 ${known.current}` : ''}`
 
     const session = await read($, editor)
     if (session) {
       const Client = 'Client' in els ? els.Client : undefined
       const isLines = !Client || (await read($, isLineMode))
       const isNew = session.id === 'new'
-      const heading = isNew
-        ? `✎ New note (${where === 'global' ? 'global' : baseName(project)})`
-        : '✎ Editing note'
+      const heading = isNew ? `✎ New note (${placeLabel})` : '✎ Editing note'
       const save = async () => $.ui.toast(await saveEditor($))
 
       // Line mode: the draft as numbered lines, one Input adding or replacing a line.
@@ -705,7 +790,7 @@ export const register: Register = (on, options) => {
       const archiveRow = (note: Note) => (
         <Box key={`arow-${note.id}`} gap={1}>
           <Text dimColor={isArchived(note)}>
-            {`${note.isDone ? '☑' : '☐'} ${preview(note.text)}${isGlobal(note) ? ' (global)' : ''}${isArchived(note) ? ' · archived' : ''}`}
+            {`${note.isDone ? '☑' : '☐'} ${preview(note.text)}${isGlobal(note) ? ' (global)' : branchMark(note, project, known)}${isArchived(note) ? ' · archived' : ''}`}
           </Text>
           {isArchived(note)
             ? [
@@ -763,9 +848,10 @@ export const register: Register = (on, options) => {
     const shown = (note: Note) =>
       (search === '' || matches(note, search)) && (tag === null || tagsOfNote(note).includes(tag))
 
-    // The lists show live notes; archived ones are in the archive view.
+    // The lists show live notes; archived ones are in the archive view. Other
+    // branches' notes show only in a search, with the other projects'.
     const current = live(list)
-    const allHere = current.filter(note => isHere(note, project))
+    const allHere = current.filter(note => isHere(note, project) && !isOffBranch(note, project, known))
     const allGlobal = current.filter(isGlobal)
     const byDue = await read($, isByDue)
     const here = paneOrder(allHere.filter(shown), byDue)
@@ -773,7 +859,10 @@ export const register: Register = (on, options) => {
     // Only while searching: matches from every other project too.
     const elsewhere = isSearching
       ? paneOrder(
-          current.filter(note => !isGlobal(note) && !isHere(note, project) && shown(note)),
+          current.filter(
+            note =>
+              !isGlobal(note) && (!isHere(note, project) || isOffBranch(note, project, known)) && shown(note),
+          ),
           byDue,
         )
       : []
@@ -792,13 +881,21 @@ export const register: Register = (on, options) => {
         field === 'isDone' ? withDone(note, !note.isDone, Date.now()) : { ...note, isPinned: !note.isPinned },
       )
 
-    // A global note moves to this project; any other to global. The change spans both keys.
+    // A global note moves to this project; a project note to global (a branch note
+    // goes back to the whole project first). The change spans both keys.
     const move = (moved: Note) => {
       const to = isGlobal(moved) ? project : null
       return change($, [keyOf(moved), keyOfProject(to)], all =>
         all.map(note => (note.id === moved.id ? { ...note, project: to } : note)),
       )
     }
+
+    // A project note moves onto the checked-out branch, a branch note back to the whole project.
+    const rebranch = (moved: Note) =>
+      changeNote($, moved.id, note => {
+        const { branch: _, ...rest } = note
+        return moved.branch === undefined && known.current !== null ? { ...rest, branch: known.current } : rest
+      })
 
     const today = localDate(Date.now())
 
@@ -832,6 +929,7 @@ export const register: Register = (on, options) => {
           {note.author === 'claude' ? '🤖 ' : ''}
           {withTags(note.text, note.isDone)}
           {!isGlobal(note) && !isHere(note, project) ? ` (${baseName(note.project ?? '')})` : ''}
+          {branchMark(note, project, known)}
         </Text>
         <Box gap={1}>
           <Button key={`done-${note.id}`} plain dimColor onPress={() => toggle(note.id, 'isDone')}>
@@ -851,9 +949,16 @@ export const register: Register = (on, options) => {
           <Button key={`edit-${note.id}`} plain dimColor onPress={() => openEditor($, note.id, note.text)}>
             edit
           </Button>
-          <Button key={`move-${note.id}`} plain dimColor onPress={() => move(note)}>
-            {isGlobal(note) ? '→ project' : '→ global'}
-          </Button>
+          {note.branch === undefined && (
+            <Button key={`move-${note.id}`} plain dimColor onPress={() => move(note)}>
+              {isGlobal(note) ? '→ project' : '→ global'}
+            </Button>
+          )}
+          {isHere(note, project) && (note.branch !== undefined || known.current !== null) && (
+            <Button key={`branch-${note.id}`} plain dimColor onPress={() => rebranch(note)}>
+              {note.branch === undefined ? `→ 🌿 ${known.current}` : '→ whole project'}
+            </Button>
+          )}
           {linksOf(note.text)
             .slice(0, MAX_LINKS)
             .map((link, i) => (
@@ -888,7 +993,7 @@ export const register: Register = (on, options) => {
         {Input && (
           <Input
             key={`new-${where}`}
-            label={where === 'global' ? '+ global: ' : `+ ${baseName(project)}: `}
+            label={`+ ${placeLabel}: `}
             placeholder="Write a note and press Enter"
             value=""
             submitLabel="add"
@@ -898,6 +1003,16 @@ export const register: Register = (on, options) => {
         )}
         <Box gap={1}>
           <Text dimColor>Add to:</Text>
+          {known.current !== null && (
+            <Button
+              key="scope-branch"
+              plain
+              dimColor={where !== 'branch'}
+              onPress={() => update($, scope, () => 'branch')}
+            >
+              {`${where === 'branch' ? '●' : '○'} 🌿 ${known.current}`}
+            </Button>
+          )}
           <Button
             key="scope-project"
             plain
@@ -977,7 +1092,10 @@ export const register: Register = (on, options) => {
         {undoLine}
 
         <Box marginTop={1}>
-          <Text bold>📁 {baseName(project)}</Text>
+          <Text bold>
+            📁 {baseName(project)}
+            {known.current === null ? '' : ` 🌿 ${known.current}`}
+          </Text>
           <Text dimColor> ({countLabel(here, allHere)})</Text>
         </Box>
         {here.length === 0 && (
@@ -996,7 +1114,7 @@ export const register: Register = (on, options) => {
 
         {elsewhere.length > 0 && (
           <Box marginTop={1}>
-            <Text bold>🗂 Other projects</Text>
+            <Text bold>🗂 Other projects and branches</Text>
             <Text dimColor> ({plural(elsewhere.length, 'match')})</Text>
           </Box>
         )}

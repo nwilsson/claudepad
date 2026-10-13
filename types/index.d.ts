@@ -25,10 +25,19 @@ export type Note = {
    * global note. Notes saved before projects existed have none: global.
    */
   project?: string | null
+  /**
+   * The git branch the note belongs to, within its project: listed only while
+   * that branch is checked out, or once it no longer exists. None for a note
+   * of the whole project, and always none for a global note.
+   */
+  branch?: string
 }
 
-/** Where the pane's input adds new notes. */
-export type Scope = 'project' | 'global'
+/** Where the pane's input adds new notes: the current branch, the project, or global. */
+export type Scope = 'branch' | 'project' | 'global'
+
+/** The project's git branches, as last read: the checked-out one (null when none is) and every local one. */
+export type Branches = { current: string | null; all: string[] }
 
 /** The multi-line editor while it is open. */
 export type EditorSession = {
@@ -75,6 +84,8 @@ declare module 'claude-code' {
       isArchiveView: boolean
       /** The pane lists notes by due date (earliest first) instead of by when they were added. */
       isByDue: boolean
+      /** The session folder's git branches, read again whenever they may have changed. */
+      branches: Branches
     }
   }
 }
