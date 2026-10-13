@@ -18,6 +18,7 @@ import {
   doneByWeek,
   dueOf,
   editorCommand,
+  fileNameOf,
   groupByKey,
   indented,
   isGlobal,
@@ -40,10 +41,13 @@ import {
   overdue,
   paneOrder,
   parseBranches,
+  isAbsolutePath,
   parseMarkdown,
   parseNoteArgs,
+  parseNotesFile,
   plural,
   preview,
+  remoteId,
   resolvePath,
   sameBranches,
   statusFor,
@@ -52,6 +56,7 @@ import {
   tagged,
   tagsOfNote,
   toMarkdown,
+  toNotesFile,
   unarchived,
   withDone,
 } from './notes'
@@ -102,7 +107,24 @@ const colorOf = (tag: string) => {
   return TAG_COLORS[hash % TAG_COLORS.length]!
 }
 
-const projectOf = async ($: EngineInterface) => normalize(await $.session.cwd())
+/**
+ * The project the session is in, as notes are filed under it: a git
+ * repository by its remote (see remoteId), so its notes follow it to every
+ * clone and machine; a repository with no remote by its root folder; any other
+ * folder by itself. `others` are the folders this project's notes were filed
+ * under before (the repository root and the session folder), which adopt moves.
+ */
+const identify = async ($: EngineInterface) => {
+  const cwd = normalize(await $.session.cwd())
+  const repo = await $.session.repo().catch(() => null)
+  if (!repo) return { project: cwd, others: [] as string[] }
+  const root = normalize(repo.root)
+  const project = repo.remote ? remoteId(repo.remote) : root
+  return { project, others: [...new Set([root, cwd])].filter(other => other !== project) }
+}
+
+/** The session's project, as session.start or the last directory change worked it out (see identify). */
+const projectOf = async ($: EngineInterface) => (await read($, folder)) || (await identify($)).project
 
 /** Sets the status line from `all`, leaving out the notes of other branches. */
 const showStatus = async ($: EngineInterface, all: readonly Note[], project: string) =>
@@ -134,27 +156,151 @@ const refreshBranches = async ($: EngineInterface) => {
 const fromStore = (saved: unknown) =>
   Array.isArray(saved) ? (saved as Note[]).map(note => (note.tags ? note : tagged(note))) : []
 
-/**
- * Reads every note from the store into the session, and refreshes the status
- * line for `project`. Notes still under the old single key move to their
- * per-project keys.
- */
-const reload = async ($: EngineInterface, project: string) => {
+/** The `notesFolder` option, as written; empty keeps notes in the plugin store. Set by register. */
+let notesFolderOption = ''
+
+/** Where notes are kept: the plugin store, or a notes folder with a file per key (see fileNameOf). */
+type NotesStore = {
+  /** The notes folder, or undefined for the plugin store. */
+  folder?: string
+  /** The keys that hold notes. */
+  keys: () => Promise<string[]>
+  /** A key's notes as saved, undefined when it has none; rejects for a file that no longer reads as notes. */
+  get: (key: string) => Promise<unknown>
+  set: (key: string, list: readonly Note[]) => Promise<void>
+  /** Empties a key: the plugin store drops it; a file, which cannot be deleted, is left with no notes. */
+  clear: (key: string) => Promise<void>
+}
+
+const pluginStore = ($: EngineInterface): NotesStore => ({
+  keys: async () => (await $.store.keys()).filter(isNotesKey),
+  get: key => $.store.get(key),
+  set: (key, list) => $.store.set(key, list),
+  clear: key => $.store.delete(key),
+})
+
+/** The notes folder's files, as one store. A file that does not read as notes is reported once per load, and never written over. */
+const folderStore = ($: EngineInterface, folder: string): NotesStore => {
+  const pathOf = (key: string) => `${folder}/${fileNameOf(key)}`
+  const readFile = async (path: string) => {
+    const text = await $.fs.read(path).catch(() => undefined)
+    if (typeof text !== 'string') return undefined
+    try {
+      return parseNotesFile(text)
+    } catch {
+      throw new Error(`claudepad: ${path} no longer reads as notes (a git merge conflict left in it?). Fix it to see its notes again.`)
+    }
+  }
+  return {
+    folder,
+    keys: async () => {
+      const keys: string[] = []
+      for (const entry of await $.fs.list(folder).catch(() => [])) {
+        if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+        const file = await readFile(`${folder}/${entry.name}`).catch((err: Error) => {
+          $.ui.toast(err.message, { timeoutMs: 10000 })
+          return undefined
+        })
+        // Only the file a key names counts: a copy under another name is not read.
+        if (file && isNotesKey(file.key) && fileNameOf(file.key) === entry.name) keys.push(file.key)
+      }
+      return keys
+    },
+    get: async key => (await readFile(pathOf(key)))?.notes,
+    set: (key, list) => $.fs.write(pathOf(key), toNotesFile(key, list)),
+    clear: key => $.fs.write(pathOf(key), toNotesFile(key, [])),
+  }
+}
+
+/** The notes folder the option names, `~` as the home folder, or '' for none. */
+const notesFolderOf = async ($: EngineInterface) => {
+  const folder = notesFolderOption.replace(/[\\/]+$/, '')
+  if (!/^~([\\/]|$)/.test(folder)) return folder
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? ''
+  return `${home.replace(/[\\/]+$/, '')}${folder.slice(1)}`
+}
+
+const notesStore = async ($: EngineInterface) => {
+  const folder = await notesFolderOf($)
+  return folder === '' ? pluginStore($) : folderStore($, folder)
+}
+
+/** Notes still under the plugin store's old single key move to their per-project keys there. */
+const migrateLegacy = async ($: EngineInterface) => {
   const keys = await $.store.keys()
+  if (!keys.includes(LEGACY_KEY)) return
   const stored = new Map<string, Note[]>()
   for (const key of keys.filter(isNotesKey)) stored.set(key, fromStore(await $.store.get(key)))
-  let byKey: ReadonlyMap<string, Note[]> = stored
-  if (keys.includes(LEGACY_KEY)) {
-    byKey = migrate(fromStore(await $.store.get(LEGACY_KEY)), stored)
-    for (const [key, list] of byKey) {
-      // `migrate` only adds, so a key it left alone has as many notes as before.
-      if (list.length !== stored.get(key)?.length) await $.store.set(key, list)
-    }
-    await $.store.delete(LEGACY_KEY)
+  for (const [key, list] of migrate(fromStore(await $.store.get(LEGACY_KEY)), stored)) {
+    // `migrate` only adds, so a key it left alone has as many notes as before.
+    if (list.length !== stored.get(key)?.length) await $.store.set(key, list)
   }
-  const all = [...byKey.values()].flat()
+  await $.store.delete(LEGACY_KEY)
+}
+
+/**
+ * The first time a notes folder is used, with no notes files in it yet, the
+ * plugin store's notes are copied in. They stay in the plugin store, for
+ * going back by clearing the option.
+ */
+const fillFolder = async ($: EngineInterface, store: NotesStore) => {
+  const files = await $.fs.list(store.folder!).catch(() => [])
+  if (files.some(entry => entry.name.endsWith('.json'))) return
+  const plugin = pluginStore($)
+  let copied = 0
+  for (const key of await plugin.keys()) {
+    const list = fromStore(await plugin.get(key))
+    if (list.length === 0) continue
+    await store.set(key, list)
+    copied += list.length
+  }
+  if (copied > 0) $.ui.toast(`📝 Copied ${plural(copied, 'note')} into ${store.folder}`)
+}
+
+/**
+ * Reads every note from the store into the session, and refreshes the status
+ * line for `project`.
+ */
+const reload = async ($: EngineInterface, project: string) => {
+  await migrateLegacy($)
+  const store = await notesStore($)
+  if (store.folder !== undefined) await fillFolder($, store)
+  const all: Note[] = []
+  for (const key of await store.keys()) {
+    try {
+      all.push(...fromStore(await store.get(key)))
+    } catch (err) {
+      $.ui.toast(err instanceof Error ? err.message : String(err), { timeoutMs: 10000 })
+    }
+  }
   await update($, notes, () => all)
   await showStatus($, all, project)
+}
+
+/**
+ * Moves the notes filed under the folders this project was known by before
+ * (see identify) to the project, with their NOTES.md sync record, and says so.
+ */
+const adopt = async ($: EngineInterface, project: string, others: readonly string[]) => {
+  const store = await notesStore($)
+  let moved = 0
+  for (const other of others) {
+    const list = fromStore(await store.get(keyOfProject(other)).catch(() => undefined))
+    if (list.length === 0) continue
+    // After the project's own notes, in the order they were written.
+    await change($, [keyOfProject(other), keyOfProject(project)], all => [
+      ...all.filter(note => note.project !== other),
+      ...all.filter(note => note.project === other).map(note => ({ ...note, project })),
+    ])
+    moved += list.length
+    const synced = await $.store.get(keyOfSync(other))
+    if (synced !== undefined && (await $.store.get(keyOfSync(project))) === undefined) {
+      await $.store.set(keyOfSync(project), synced)
+    }
+  }
+  if (moved > 0) {
+    $.ui.toast(`📝 ${plural(moved, 'note')} of ${baseName(others[0]!)} now go with the repository, as ${project}`)
+  }
 }
 
 /**
@@ -166,8 +312,10 @@ const reload = async ($: EngineInterface, project: string) => {
  */
 const change = async ($: EngineInterface, keys: readonly string[], fn: (list: Note[]) => Note[]) => {
   const touched = [...new Set(keys)]
+  const store = await notesStore($)
   const before: Note[] = []
-  for (const key of touched) before.push(...fromStore(await $.store.get(key)))
+  // A notes file that no longer reads as notes stops the change: it is never written over.
+  for (const key of touched) before.push(...fromStore(await store.get(key)))
   const written = fn(before)
   const groups = groupByKey(written)
   const stray = [...groups.keys()].find(key => !touched.includes(key))
@@ -176,7 +324,7 @@ const change = async ($: EngineInterface, keys: readonly string[], fn: (list: No
   }
   for (const key of touched) {
     const list = groups.get(key)
-    await (list ? $.store.set(key, list) : $.store.delete(key))
+    await (list ? store.set(key, list) : store.clear(key))
   }
   const all = await update($, notes, current => [
     ...current.filter(note => !touched.includes(keyOf(note))),
@@ -284,13 +432,20 @@ const saveLastReply = async ($: EngineInterface, text: string, where: Scope) => 
 
 /**
  * Opens a file a note mentions in `editor`. A relative path is under the
- * note's own folder: the session's, spelled as the host spells it, for this
- * project's and the global notes. A failure is a toast.
+ * note's own folder: for this project's and the global notes, the repository
+ * root, else the session's folder, spelled as the host spells it; for another
+ * project's, its folder, which a project known by its remote does not have
+ * here. A failure is a toast.
  */
 const openLink = async ($: EngineInterface, editor: Editor, note: Note, link: FileLink) => {
-  const here = await $.session.cwd()
-  const folder = isGlobal(note) || isHere(note, normalize(here)) ? here : note.project!
-  const argv = editorCommand(editor, resolvePath(link.path, folder), link)
+  const isOurs = isGlobal(note) || isHere(note, await projectOf($))
+  const repo = isOurs ? await $.session.repo().catch(() => null) : null
+  const folder = isOurs ? (repo?.root ?? (await $.session.cwd())) : isAbsolutePath(note.project!) ? note.project! : null
+  if (folder === null && !isAbsolutePath(link.path)) {
+    $.ui.toast(`Couldn't open ${link.text}: it is under ${note.project}, which is not open here.`)
+    return
+  }
+  const argv = editorCommand(editor, resolvePath(link.path, folder ?? ''), link)
   const failed = (why: string) => $.ui.toast(`Couldn't open ${link.text} with ${argv[0]}: ${why}`)
   try {
     const { exitCode, stderr } = await $.process.run(argv, { timeoutMs: 15000 })
@@ -434,11 +589,14 @@ const saveEditor = async ($: EngineInterface, text?: string) => {
 export const register: Register = (on, options) => {
   // The mod's `editor` option: which editor a note's file reference opens in.
   const linkEditor: Editor = EDITORS.find(name => name === options.editor) ?? 'vscode'
+  // The mod's `notesFolder` option: a folder to keep notes in instead of the plugin store.
+  notesFolderOption = typeof options.notesFolder === 'string' ? options.notesFolder.trim() : ''
 
   on('session.start', async ($, e, next) => {
-    const project = await projectOf($)
+    const { project, others } = await identify($)
     await update($, folder, () => project)
     await readBranches($)
+    await adopt($, project, others)
     await reload($, project)
     // NOTES.md edits made since the last session, then any made during this one.
     await pollFile($).catch(() => undefined)
@@ -535,9 +693,10 @@ export const register: Register = (on, options) => {
   // A new folder has its own notes: read them fresh (other sessions may have
   // written since), recount the status line and redraw the pane.
   on('classic.CwdChanged', async ($, e, next) => {
-    const project = normalize(e.new_cwd)
+    const { project, others } = await identify($)
     await update($, folder, () => project)
     await readBranches($)
+    await adopt($, project, others)
     await reload($, project)
     return next(e)
   })

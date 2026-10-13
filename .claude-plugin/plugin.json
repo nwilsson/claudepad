@@ -16,6 +16,12 @@
       "description": "The editor a note's path:line opens in: vscode (code -g), cursor (cursor -g) or jetbrains (idea --line).",
       "default": "vscode",
       "options": ["vscode", "cursor", "jetbrains"]
+    },
+    "notesFolder": {
+      "type": "string",
+      "title": "Notes folder",
+      "description": "A folder to keep notes in, one JSON file per project, instead of Claude Code's plugin store. Point it at a git-tracked or synced folder to have your notes on every machine. Absolute, or starting with ~/. Empty keeps them in the plugin store.",
+      "default": ""
     }
   }
 }

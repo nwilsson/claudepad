@@ -7,6 +7,10 @@ import {
   dueOf,
   editorCommand,
   exportOrder,
+  fileNameOf,
+  parseNotesFile,
+  remoteId,
+  toNotesFile,
   groupByKey,
   keyOfProject,
   linksOf,
@@ -441,4 +445,31 @@ test('a NOTES.md edit adds new lines, applies marks, archives removed lines and 
     ['keep', true],
     ['other', true],
   ])
+})
+
+test('a remote is the same repository however it is spelled', () => {
+  expect(remoteId('git@github.com:Me/Demo.git')).toBe('github.com/me/demo')
+  expect(remoteId('https://user:token@github.com/Me/Demo.git/')).toBe('github.com/me/demo')
+  expect(remoteId('ssh://git@gitlab.example.com:2222/group/sub/repo.git')).toBe('gitlab.example.com/group/sub/repo')
+  // A remote on disk is its folder.
+  expect(remoteId('E:\\Repos\\Demo')).toBe('e:/repos/demo')
+  expect(remoteId('file:///e:/repos/demo.git')).toBe('e:/repos/demo')
+  expect(remoteId('/srv/git/demo.git')).toBe('/srv/git/demo')
+})
+
+test('a notes folder file: named for its key, one note per line, and a broken one is refused', () => {
+  expect(fileNameOf('project:github.com/o/r')).toMatch(/^project_github\.com_o_r-[0-9a-f]{8}\.json$/)
+  expect(fileNameOf('global')).toMatch(/^global-[0-9a-f]{8}\.json$/)
+  // Keys that read alike still get files of their own.
+  expect(fileNameOf('project:a/b')).not.toBe(fileNameOf('project:a:b'))
+  expect(fileNameOf(`project:${'x'.repeat(300)}`).length).toBeLessThan(100)
+
+  const list = [note('one'), note('two')]
+  const text = toNotesFile('project:/work/demo', list)
+  expect(text.split('\n')).toHaveLength(5)
+  expect(parseNotesFile(text)).toEqual({ key: 'project:/work/demo', notes: list })
+  expect(parseNotesFile(toNotesFile('global', []))).toEqual({ key: 'global', notes: [] })
+  const conflicted = text.replace('[\n', '[\n<<<<<<< HEAD\n')
+  expect(() => parseNotesFile(conflicted)).toThrow()
+  expect(() => parseNotesFile('{"something": "else"}')).toThrow()
 })

@@ -47,6 +47,25 @@ export const normalize = (path: string) => path.replace(/\\/g, '/').replace(/\/+
 
 export const baseName = (path: string) => path.split('/').pop() || path
 
+/**
+ * A repository's identity from its remote URL, the same from every clone and
+ * machine: host and path, lowercased, without scheme, user, port or `.git`.
+ * `git@github.com:o/r.git` and `https://github.com/O/r` are both
+ * `github.com/o/r`. A remote that is a local path is that path, normalized.
+ */
+export const remoteId = (remote: string) => {
+  const url = remote.trim().replace(/\/+$/, '').replace(/\.git$/i, '')
+  // A local path, or a file:// URL of one (file:///e:/x is e:/x).
+  const local = url.replace(/^file:\/\//i, '').replace(/^\/([a-z]:)/i, '$1')
+  if (/^([a-z]:)?[\\/]/i.test(local)) return normalize(local)
+  // scheme://[user@]host[:port]/path
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:]+)(?::\d+)?(\/.*)?$/i.exec(url)
+  if (withScheme) return `${withScheme[1]}${withScheme[2] ?? ''}`.toLowerCase()
+  // scp-like: [user@]host:path
+  const scp = /^(?:[^@/]+@)?([^:/]+):\/?(.+)$/.exec(url)
+  return (scp ? `${scp[1]}/${scp[2]}` : url).replace(/\\/g, '/').toLowerCase()
+}
+
 export const isGlobal = (note: Note) => note.project == null
 
 export const isHere = (note: Note, project: string) => note.project === project
@@ -155,6 +174,34 @@ export const keyOfSync = (project: string) => `sync:${keyOfProject(project).slic
 /** A store key that holds notes in the per-project layout. */
 export const isNotesKey = (key: string) => key === GLOBAL_KEY || key.startsWith(PROJECT_PREFIX)
 
+/**
+ * The file a store key's notes live in, in a notes folder: the key with
+ * anything but letters, digits, `.`, `_` and `-` as `_` (cut to 80
+ * characters), then a hash of the whole key, so two keys never share a file.
+ * `project:github.com/o/r` is `project_github.com_o_r-1a2b3c4d.json`.
+ */
+export const fileNameOf = (key: string) => {
+  const readable = key.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80)
+  return `${readable}-${fnv(key, 0x811c9dc5)}.json`
+}
+
+/**
+ * A notes folder file: its key, then one note per line, so git can merge two
+ * machines' changes to different notes.
+ */
+export const toNotesFile = (key: string, list: readonly Note[]) =>
+  list.length === 0
+    ? `{"key": ${JSON.stringify(key)}, "notes": []}\n`
+    : `{"key": ${JSON.stringify(key)}, "notes": [\n${list.map(note => JSON.stringify(note)).join(',\n')}\n]}\n`
+
+/** A notes folder file's key and notes; throws on a file that is not one (a merge conflict left in it, say). */
+export const parseNotesFile = (text: string) => {
+  const parsed: unknown = JSON.parse(text)
+  const file = parsed as { key?: unknown; notes?: unknown }
+  if (typeof file?.key !== 'string' || !Array.isArray(file.notes)) throw new Error('not a notes file')
+  return { key: file.key, notes: file.notes as Note[] }
+}
+
 /** The notes by store key, each key's in list order. */
 export const groupByKey = (list: readonly Note[]) => {
   const groups = new Map<string, Note[]>()
@@ -230,9 +277,12 @@ export const linksOf = (text: string): FileLink[] =>
     text: m[0].slice(m[1]!.length),
   }))
 
+/** A path from a drive or file system root; a project known by its remote (`github.com/o/r`) is not one. */
+export const isAbsolutePath = (path: string) => /^([A-Za-z]:[\\/]|[\\/])/.test(path)
+
 /** `path` as an absolute path: as it is when absolute, else under `folder`. */
 export const resolvePath = (path: string, folder: string) =>
-  /^([A-Za-z]:[\\/]|[\\/])/.test(path) ? path : `${folder.replace(/[\\/]+$/, '')}/${path.replace(/^\.[\\/]/, '')}`
+  isAbsolutePath(path) ? path : `${folder.replace(/[\\/]+$/, '')}/${path.replace(/^\.[\\/]/, '')}`
 
 /** The editors a link can open in; the mod's `editor` option picks one. */
 export const EDITORS = ['vscode', 'cursor', 'jetbrains'] as const

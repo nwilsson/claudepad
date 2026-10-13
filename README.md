@@ -18,9 +18,16 @@ mod's own store under your Claude Code config folder.
   for the current git branch, and a bare `/note` opens the multi-line editor. `/note --last [text]` saves Claude's last
   reply as a note (your text, such as tags, as its first line); the pane
   has a button for it too.
-- **Per-project and global notes.** Project notes are tied to the session's
-  folder, so each repo keeps its own list. Global notes follow you
+- **Per-project and global notes.** Each repo keeps its own list, filed
+  under its git remote (`github.com/you/repo`), so the same notes show up
+  in every clone, subfolder and machine. A repo with no remote goes by its
+  root folder, and any other folder by itself. Global notes follow you
   everywhere.
+- **A notes folder, if you want one.** Set the `notesFolder` option (in
+  `/config`) to a git-tracked or synced folder, and notes are kept there,
+  one JSON file per project with one note per line, instead of in Claude
+  Code's plugin store. Your existing notes are copied in the first time. A
+  file a merge conflict broke is reported and left alone until you fix it.
 - **Branch notes.** A note can belong to a git branch (🌿 in the pane):
   it is listed only while that branch is checked out, and a search still
   finds it from any other. Once the branch is deleted, its notes join the
