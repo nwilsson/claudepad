@@ -20,7 +20,6 @@ import {
   editorCommand,
   fileNameOf,
   groupByKey,
-  indented,
   isGlobal,
   isHere,
   isArchived,
@@ -39,7 +38,9 @@ import {
   normalize,
   onBranch,
   overdue,
+  PINNED_TOKEN_LIMIT,
   paneOrder,
+  pinnedContext,
   parseBranches,
   isAbsolutePath,
   parseMarkdown,
@@ -48,12 +49,15 @@ import {
   plural,
   preview,
   remoteId,
+  reorder,
   resolvePath,
   sameBranches,
   statusFor,
   syncFile,
   tagCounts,
   tagged,
+  tokenLabel,
+  tokensOf,
   tagsOfNote,
   toMarkdown,
   toNotesFile,
@@ -85,6 +89,8 @@ const isArchiveView = atom({ plugin: 'claudepad', key: 'isArchiveView' } as cons
 const isByDue = atom({ plugin: 'claudepad', key: 'isByDue' } as const, false)
 const branches = atom({ plugin: 'claudepad', key: 'branches' } as const, NO_BRANCHES)
 const fileSeen = atom({ plugin: 'claudepad', key: 'fileSeen' } as const, null as FileSeen | null)
+const isPinnedHeavy = atom({ plugin: 'claudepad', key: 'isPinnedHeavy' } as const, false)
+const selected = atom({ plugin: 'claudepad', key: 'selected' } as const, null as string | null)
 
 /** Open pinned notes in every project, worked out again only when the notes change. */
 const pinned = derive([notes], list => live(list).filter(note => note.isPinned && !note.isDone))
@@ -777,22 +783,19 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     // The branch may have changed outside the session since the last prompt.
     await refreshBranches($)
-    const project = await projectOf($)
-    const known = await read($, branches)
-    const shown = (await read($, pinned)).filter(
-      note => (isGlobal(note) || isHere(note, project)) && !isOffBranch(note, project, known),
-    )
-    if (shown.length === 0) {
+    const block = pinnedContext(await read($, pinned), await projectOf($), await read($, branches))
+    // Pinned notes ride along with every prompt: say so once when they grow past the limit.
+    const isHeavy = block !== undefined && tokensOf(block) > PINNED_TOKEN_LIMIT
+    if (isHeavy && !(await read($, isPinnedHeavy))) {
+      $.ui.toast(
+        `📌 Pinned notes add about ${tokenLabel(tokensOf(block))} tokens to every prompt. Unpin what Claude doesn't need each time.`,
+        { timeoutMs: 8000 },
+      )
+    }
+    await update($, isPinnedHeavy, () => isHeavy)
+    if (block === undefined) {
       return next(e)
     }
-    const block =
-      "The user's pinned notes from their notepad (standing context; keep them in mind):\n" +
-      shown
-        .map(
-          note =>
-            `- ${indented(note.text, '  ')}${isGlobal(note) ? '' : note.branch === undefined ? ' (this project)' : ` (this project, branch ${note.branch})`}`,
-        )
-        .join('\n')
     return next({ ...e, context: [...(e.context ?? []), block] })
   })
 
@@ -1144,9 +1147,35 @@ export const register: Register = (on, options) => {
       return parts
     }
 
+    // The keys: j and k select a note down the lists, d and p act on it, u and n move it.
+    const order = [...here, ...global, ...elsewhere]
+    const pickedId = await read($, selected)
+    const picked = order.find(note => note.id === pickedId)
+    const step = (by: -1 | 1) => {
+      const at = picked ? order.indexOf(picked) : by > 0 ? -1 : order.length
+      const next = order[Math.min(order.length - 1, Math.max(0, at + by))]
+      return update($, selected, () => next?.id ?? null)
+    }
+    // Only this project's and the global notes move, and not while sorted by due date.
+    const sectionOf = (note: Note) =>
+      byDue ? undefined : here.includes(note) ? here : global.includes(note) ? global : undefined
+    const canMove = (note: Note, by: -1 | 1) => {
+      const section = sectionOf(note)
+      return section !== undefined && reorder(section, note.id, by) !== undefined
+    }
+    const moveBy = async (note: Note, by: -1 | 1) => {
+      const section = sectionOf(note)
+      const ranks = section && reorder(section, note.id, by)
+      if (!ranks) return
+      await change($, [keyOf(note)], all =>
+        all.map(other => (ranks.has(other.id) ? { ...other, order: ranks.get(other.id)! } : other)),
+      )
+    }
+
     const row = (note: Note) => (
       <Box key={`row-${note.id}`} flexDirection="column" marginTop={1}>
-        <Text dimColor={note.isDone} strikethrough={note.isDone} bold={note.isPinned}>
+        <Text dimColor={note.isDone} strikethrough={note.isDone} bold={note.isPinned || note === picked}>
+          {note === picked ? '▸ ' : ''}
           {note.isDone ? '☑' : '☐'} {note.isPinned ? '📌 ' : ''}
           {note.author === 'claude' ? '🤖 ' : ''}
           {withTags(note.text, note.isDone)}
@@ -1171,6 +1200,16 @@ export const register: Register = (on, options) => {
           <Button key={`edit-${note.id}`} plain dimColor onPress={() => openEditor($, note.id, note.text)}>
             edit
           </Button>
+          {canMove(note, -1) && (
+            <Button key={`up-${note.id}`} plain dimColor onPress={() => moveBy(note, -1)}>
+              ↑
+            </Button>
+          )}
+          {canMove(note, 1) && (
+            <Button key={`down-${note.id}`} plain dimColor onPress={() => moveBy(note, 1)}>
+              ↓
+            </Button>
+          )}
           {note.branch === undefined && (
             <Button key={`move-${note.id}`} plain dimColor onPress={() => move(note)}>
               {isGlobal(note) ? '→ project' : '→ global'}
@@ -1201,6 +1240,8 @@ export const register: Register = (on, options) => {
     )
 
     const visible = [...here, ...global]
+    const pinnedBlock = pinnedContext(list, project, known)
+    const pinnedTokens = pinnedBlock === undefined ? 0 : tokensOf(pinnedBlock)
     // Tags of this project's and the global notes; an active tag stays listed even if it empties.
     const tagBar = tagCounts([...allHere, ...allGlobal])
     if (tag !== null && !tagBar.some(([name]) => name === tag)) tagBar.unshift([tag, 0])
@@ -1312,6 +1353,39 @@ export const register: Register = (on, options) => {
         )}
 
         {undoLine}
+
+        {pinnedTokens > PINNED_TOKEN_LIMIT && (
+          <Box marginTop={1}>
+            <Text color="#e5a50a">
+              {`📌 Pinned notes add about ${tokenLabel(pinnedTokens)} tokens to every prompt. Unpin what Claude doesn't need each time.`}
+            </Text>
+          </Box>
+        )}
+
+        {e.props.isFocused && order.length > 0 && (
+          <Box marginTop={1} gap={2} flexWrap="wrap">
+            <Button key="key-next" hotkey="j" plain dimColor onPress={() => step(1)}>
+              next
+            </Button>
+            <Button key="key-previous" hotkey="k" plain dimColor onPress={() => step(-1)}>
+              previous
+            </Button>
+            {picked && [
+              <Button key="key-done" hotkey="d" plain dimColor onPress={() => toggle(picked.id, 'isDone')}>
+                {picked.isDone ? 'undo' : 'done'}
+              </Button>,
+              <Button key="key-pin" hotkey="p" plain dimColor onPress={() => toggle(picked.id, 'isPinned')}>
+                {picked.isPinned ? 'unpin' : 'pin'}
+              </Button>,
+              <Button key="key-up" hotkey="u" plain dimColor onPress={() => moveBy(picked, -1)}>
+                move up
+              </Button>,
+              <Button key="key-down" hotkey="n" plain dimColor onPress={() => moveBy(picked, 1)}>
+                move down
+              </Button>,
+            ]}
+          </Box>
+        )}
 
         <Box marginTop={1}>
           <Text bold>

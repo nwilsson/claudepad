@@ -365,9 +365,13 @@ const byDue = (a: Note, b: Note) => {
   return first.localeCompare(second)
 }
 
+/** A note's place among notes alike: where it was moved to, else when it was made. */
+export const rankOf = (note: Note) => note.order ?? note.createdAt
+
 /**
- * The pane's order: pinned first, then open before done, then oldest. With
- * `isByDue`, earliest due date before oldest, and notes with none last.
+ * The pane's order: pinned first, then open before done, then each note's
+ * place (see rankOf). With `isByDue`, earliest due date before place, and
+ * notes with none last.
  */
 export const paneOrder = (list: readonly Note[], isByDue = false) =>
   [...list].sort(
@@ -375,17 +379,38 @@ export const paneOrder = (list: readonly Note[], isByDue = false) =>
       Number(b.isPinned) - Number(a.isPinned) ||
       Number(a.isDone) - Number(b.isDone) ||
       (isByDue ? byDue(a, b) : 0) ||
-      a.createdAt - b.createdAt,
+      rankOf(a) - rankOf(b),
   )
 
-/** The export's order: open before done, then pinned first, then oldest. */
+/** The export's order: open before done, then pinned first, then each note's place. */
 export const exportOrder = (list: readonly Note[]) =>
   [...list].sort(
     (a, b) =>
       Number(a.isDone) - Number(b.isDone) ||
       Number(b.isPinned) - Number(a.isPinned) ||
-      a.createdAt - b.createdAt,
+      rankOf(a) - rankOf(b),
   )
+
+/**
+ * Moving the note `id` one place up (`by` -1) or down (+1) in `shown`, a list
+ * in pane order: the new `order` of each note that changes, by id. It swaps
+ * places with its neighbor, which must be alike (both pinned or not, both done
+ * or not), since the pane keeps those apart; else undefined, as at either end.
+ */
+export const reorder = (shown: readonly Note[], id: string, by: -1 | 1) => {
+  const at = shown.findIndex(note => note.id === id)
+  const note = shown[at]
+  const other = shown[at + by]
+  if (!note || !other || other.isPinned !== note.isPinned || other.isDone !== note.isDone) return undefined
+  const [mine, theirs] = [rankOf(note), rankOf(other)]
+  // Two notes made in the same millisecond share a place: step past it instead.
+  return mine === theirs
+    ? new Map([[note.id, theirs + by]])
+    : new Map([
+        [note.id, theirs],
+        [other.id, mine],
+      ])
+}
 
 const NOTE_FLAG = /^\s*(-g|--global|-b|--branch|--last)(?=\s|$)/
 
@@ -713,4 +738,34 @@ export const syncFile = (
     })
     .map(note => note.id)
   return { list: merged.list, added: merged.added, updated: merged.updated, restored: back.size, archive }
+}
+
+/** About how many tokens `text` takes in a prompt: one per four characters, as a rule of thumb. */
+export const tokensOf = (text: string) => Math.ceil(text.length / 4)
+
+/** Past this many tokens, pinned notes get a warning: they ride along with every prompt. */
+export const PINNED_TOKEN_LIMIT = 1000
+
+/** A token count as a warning says it: `850`, `1.2k`. */
+export const tokenLabel = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`)
+
+/**
+ * What every prompt carries of the pinned notes: the open pinned ones of this
+ * project (other branches' left out) and global ones; undefined with none.
+ */
+export const pinnedContext = (list: readonly Note[], project: string, branches = NO_BRANCHES) => {
+  const shown = live(list).filter(
+    note =>
+      note.isPinned &&
+      !note.isDone &&
+      (isGlobal(note) || isHere(note, project)) &&
+      !isOffBranch(note, project, branches),
+  )
+  if (shown.length === 0) return undefined
+  const where = (note: Note) =>
+    isGlobal(note) ? '' : note.branch === undefined ? ' (this project)' : ` (this project, branch ${note.branch})`
+  return (
+    "The user's pinned notes from their notepad (standing context; keep them in mind):\n" +
+    shown.map(note => `- ${indented(note.text, '  ')}${where(note)}`).join('\n')
+  )
 }

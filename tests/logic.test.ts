@@ -9,8 +9,12 @@ import {
   exportOrder,
   fileNameOf,
   parseNotesFile,
+  pinnedContext,
   remoteId,
+  reorder,
   toNotesFile,
+  tokenLabel,
+  tokensOf,
   groupByKey,
   keyOfProject,
   linksOf,
@@ -472,4 +476,51 @@ test('a notes folder file: named for its key, one note per line, and a broken on
   const conflicted = text.replace('[\n', '[\n<<<<<<< HEAD\n')
   expect(() => parseNotesFile(conflicted)).toThrow()
   expect(() => parseNotesFile('{"something": "else"}')).toThrow()
+})
+
+test('a note moves by swapping places with a like neighbor, never past a pinned or done one', () => {
+  const list = paneOrder([
+    note('pinned', { isPinned: true, createdAt: 1 }),
+    note('a', { createdAt: 2 }),
+    note('b', { createdAt: 3 }),
+    note('c', { createdAt: 3 }),
+    note('done', { isDone: true, createdAt: 0 }),
+  ])
+  expect(list.map(n => n.text)).toEqual(['pinned', 'a', 'b', 'c', 'done'])
+  expect(reorder(list, 'b', -1)).toEqual(new Map([['b', 2], ['a', 3]]))
+  // b and c share a place (made in the same millisecond): c steps past it.
+  expect(reorder(list, 'c', -1)).toEqual(new Map([['c', 2]]))
+  // Not past the pinned note, the done one, or either end.
+  expect(reorder(list, 'a', -1)).toBeUndefined()
+  expect(reorder(list, 'c', 1)).toBeUndefined()
+  expect(reorder(list, 'pinned', -1)).toBeUndefined()
+  expect(reorder(list, 'missing', 1)).toBeUndefined()
+
+  // A moved note's order is its place, in the pane and the export.
+  const moved = list.map(n => (n.text === 'b' ? { ...n, order: 2 } : n.text === 'a' ? { ...n, order: 3 } : n))
+  expect(paneOrder(moved).map(n => n.text)).toEqual(['pinned', 'b', 'a', 'c', 'done'])
+  expect(exportOrder(moved).map(n => n.text)).toEqual(['pinned', 'b', 'a', 'c', 'done'])
+})
+
+test('pinned context: open pinned notes here, on this branch, and global, with a size to warn on', () => {
+  const branches = { current: 'feat', all: ['main', 'feat'] }
+  const list = [
+    note('here', { isPinned: true }),
+    note('on feat', { isPinned: true, branch: 'feat' }),
+    note('on main', { isPinned: true, branch: 'main' }),
+    note('everywhere', { isPinned: true, project: null }),
+    note('not pinned'),
+    note('done', { isPinned: true, isDone: true }),
+    note('archived', { isPinned: true, archivedAt: 1 }),
+    note('elsewhere', { isPinned: true, project: '/work/other' }),
+  ]
+  expect(pinnedContext(list, '/work/demo', branches)).toBe(
+    "The user's pinned notes from their notepad (standing context; keep them in mind):\n" +
+      '- here (this project)\n' +
+      '- on feat (this project, branch feat)\n' +
+      '- everywhere',
+  )
+  expect(pinnedContext([note('x')], '/work/demo')).toBeUndefined()
+  expect(tokensOf('x'.repeat(4001))).toBe(1001)
+  expect([tokenLabel(850), tokenLabel(1234)]).toEqual(['850', '1.2k'])
 })

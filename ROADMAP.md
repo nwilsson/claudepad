@@ -75,16 +75,20 @@ or more).
   - Another branch's notes, while that branch exists, are left out of the lists, the status line, overdue, pinned context, `list_notes` and export (`isOffBranch`, `onBranch`); a search finds them, under **🗂 Other projects and branches**. A deleted branch's notes list with the project's again, marked `(gone)` (Claude sees `since deleted`), so merging a branch never strands its notes. Outside a repository every branch counts as gone.
   - Adding: **Add to: ○ 🌿 branch** in the pane (shown on a branch), `/note -b`, and `add_note`'s `branch: true`, each falling back to a project note with no branch checked out. A row's **→ 🌿 name** puts a project note on the branch, **→ whole project** takes it off; a branch note has no **→ global**.
   - `NOTES.md`: each branch exported gets a `## 🌿 name` section, read back onto that branch; the branch is part of the import's match, and `--replace` keeps other branches' notes, which the file cannot hold.
-- [ ] Templates with variables, sent through the existing → prompt button.
+- ~~Templates with variables, sent through the existing → prompt button.~~ **Skipped** (2026-10-13): nothing depends on it, and it pays only for prompts reused often. The shape, if it comes back: a note with `{{name}}` blanks (or `#template`), whose → prompt asks for each, with `{{branch}}`, `{{project}}` and `{{date}}` filled in.
 - [x] Archive instead of delete, and a completed-by-week view.
   - Notes carry `doneAt` (set on done, cleared on reopen; `withDone()`) and `archivedAt`. **archive** replaces **delete**, and **clear done** archives every done note here and global in one go; both offer undo in the pane for 5 s and with `/notes undo` (which now restores a whole **clear done**). Archived notes are left out of the lists, search, the status line, overdue, pinned context, `list_notes` and export; an import that matches one leaves it archived, so an old file cannot bring it back.
   - **🗄 archive (N)** opens the archive view for this project and global: done notes by the local week (Monday) they were finished, newest first, with notes done before `doneAt` existed under "Earlier", then archived notes that were not done. Each archived note can be restored or deleted for good, the only permanent delete.
 
 ## Phase 5: polish (S)
 
-- [ ] Pane keyboard shortcuts (j/k to move, d to mark done).
-- [ ] Up/down reordering.
-- [ ] Warning when pinned notes take up too much prompt context.
+- [x] Pane keyboard shortcuts (j/k to move, d to mark done).
+  - Button `hotkey`s, which press while the pane holds the focus: a key bar, drawn only while `isFocused`, with `j` next and `k` previous, then for the selected note `d` done, `p` pin, `u` move up and `n` move down. A hotkey is one lowercase letter or digit and Shift is not its own key, so moving cannot be `J`/`K`. The `selected` atom holds the note; its row is drawn bold behind `▸`. The order the keys walk is the pane's: this project, global, then other projects' search matches.
+  - Not checked live: whether the add-note `Input`, focused when the pane opens, takes the letters first. The test kit presses Buttons by key, not by hotkey.
+- [x] Up/down reordering.
+  - `Note.order`, set when moved, is a note's place in place of `createdAt` (`rankOf`), in the pane and the export. `reorder` swaps places with the neighbor, only one alike (pinned or not, done or not, which the pane keeps apart), and steps a note past a neighbor made in the same millisecond. **↑**/**↓** on each row where the note can move; neither, nor `u`/`n`, while sorted by due date or for other projects' notes.
+- [x] Warning when pinned notes take up too much prompt context.
+  - `pinnedContext` (moved from the prompt hook to `notes.ts`) builds the block; past `PINNED_TOKEN_LIMIT`, 1,000 tokens at four characters each (`tokensOf`), the pane shows a line and the next prompt a toast, once until the notes drop under the limit again (`isPinnedHeavy`). The notes are still sent: it only warns.
 
 ## Dependencies
 

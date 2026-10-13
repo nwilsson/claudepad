@@ -34,7 +34,10 @@ mod's own store under your Claude Code config folder.
   project's list again, marked **(gone)**. The branch is read again before
   each prompt and after Claude runs a shell command.
 - **Done, pin, edit, move, archive.** One button each on every note, and
-  **clear done** at the bottom archives every finished one. An archive can
+  **clear done** at the bottom archives every finished one. **↑** and **↓**
+  put notes in your own order.
+- **Keys.** With the pane focused, `j`/`k` select a note, `d` marks it
+  done, `p` pins it, and `u`/`n` move it up or down. An archive can
   be undone from the pane for 5 seconds, and with `/notes undo` after that.
 - **An archive view.** **🗄 archive** shows what you finished, week by week,
   and what you archived. Restore a note from there, or delete it for good:
@@ -64,6 +67,7 @@ mod's own store under your Claude Code config folder.
 - **A status line.** `📝 3 here · 5 global`.
 - **Claude-aware.**
   - Pinned notes are sent to Claude with every prompt, as standing context.
+    Past about 1k tokens, the pane and a toast say so.
   - **→ prompt** puts a note into the prompt box.
   - Claude gets `add_note` and `list_notes` tools, so it can park a
     follow-up instead of derailing the task, and look up what you wrote.

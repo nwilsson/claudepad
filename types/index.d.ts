@@ -16,6 +16,11 @@ export type Note = {
   author: 'you' | 'claude'
   createdAt: number
   /**
+   * Its place among notes alike (pinned or not, done or not) once moved up or
+   * down in the pane; until then its `createdAt` is its place.
+   */
+  order?: number
+  /**
    * The note's tags, lowercased, without the `#`, stored whenever its text is
    * written. Notes saved before tags were stored have none until loaded.
    */
@@ -91,6 +96,10 @@ declare module 'claude-code' {
       branches: Branches
       /** NOTES.md as the last poll saw it, so an unchanged file is not read again. */
       fileSeen: FileSeen | null
+      /** The pinned notes were over the context limit at the last prompt, so the warning is not repeated. */
+      isPinnedHeavy: boolean
+      /** The note the pane's keys act on (j/k move it), or null for none. */
+      selected: string | null
     }
   }
 }
