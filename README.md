@@ -50,6 +50,10 @@ mod's own store under your Claude Code config folder.
 - **`NOTES.md` sync.** `/notes export [--force]` writes the project's notes
   to a `NOTES.md` in the folder, `/notes import [--replace]` reads it back.
   Export never overwrites a `NOTES.md` it did not write unless forced.
+  Once exported, the file is followed: edit it in your editor (or let
+  Claude or git change it) and within a few seconds new lines become
+  notes, ticks and pins carry over, and a deleted line archives its note,
+  with undo. A `NOTES.md` you wrote by hand is never followed.
 - **A status line.** `📝 3 here · 5 global`.
 - **Claude-aware.**
   - Pinned notes are sent to Claude with every prompt, as standing context.

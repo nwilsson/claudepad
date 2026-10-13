@@ -1,7 +1,7 @@
 import { atom, derive, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ArchiveUndo, EditorSession, Note, Scope } from '../types'
+import type { ArchiveUndo, EditorSession, FileSeen, Note, Scope } from '../types'
 import type { Editor, FileLink } from './notes'
 import {
   EDITORS,
@@ -27,6 +27,7 @@ import {
   isOffBranch,
   keyOf,
   keyOfProject,
+  keyOfSync,
   linksOf,
   live,
   localDate,
@@ -46,6 +47,7 @@ import {
   resolvePath,
   sameBranches,
   statusFor,
+  syncFile,
   tagCounts,
   tagged,
   tagsOfNote,
@@ -77,12 +79,16 @@ const lastArchive = atom({ plugin: 'claudepad', key: 'lastArchive' } as const, n
 const isArchiveView = atom({ plugin: 'claudepad', key: 'isArchiveView' } as const, false)
 const isByDue = atom({ plugin: 'claudepad', key: 'isByDue' } as const, false)
 const branches = atom({ plugin: 'claudepad', key: 'branches' } as const, NO_BRANCHES)
+const fileSeen = atom({ plugin: 'claudepad', key: 'fileSeen' } as const, null as FileSeen | null)
 
 /** Open pinned notes in every project, worked out again only when the notes change. */
 const pinned = derive([notes], list => live(list).filter(note => note.isPinned && !note.isDone))
 
 /** How long the pane offers to undo an archive. */
 const UNDO_MS = 5000
+
+/** How often NOTES.md is checked for outside edits. */
+const POLL_MS = 3000
 
 /** The most open buttons one note gets, one per file it mentions. */
 const MAX_LINKS = 3
@@ -310,8 +316,60 @@ const exportNotes = async ($: EngineInterface, force: boolean) => {
     }
   }
   const project = await projectOf($)
-  await $.fs.write(EXPORT_FILE, toMarkdown(await read($, notes), project, Date.now(), await read($, branches)))
+  const markdown = toMarkdown(await read($, notes), project, Date.now(), await read($, branches))
+  await $.fs.write(EXPORT_FILE, markdown)
+  await markSynced($, project, markdown)
   return { isWritten: true, message: `📝 Exported notes to ${EXPORT_FILE} in ${baseName(project)}.` }
+}
+
+/**
+ * Records `markdown` as the project's NOTES.md in sync with the notes, so the
+ * poll compares later edits with it, and the file's time as seen, so the poll
+ * does not read this write back.
+ */
+const markSynced = async ($: EngineInterface, project: string, markdown: string) => {
+  await $.store.set(keyOfSync(project), markdown)
+  const stat = await $.fs.stat(EXPORT_FILE).catch(() => undefined)
+  if (stat) await update($, fileSeen, () => ({ project, mtimeMs: stat.mtimeMs }))
+}
+
+/**
+ * Checks the session folder's NOTES.md for edits made outside the notepad (an
+ * editor, Claude, git) and applies them (see syncFile). Only a file the export
+ * wrote is followed; it is read only when its time changed. The first time a
+ * project's file is seen it is only recorded, since there is nothing to
+ * compare it with.
+ */
+const pollFile = async ($: EngineInterface) => {
+  const project = await projectOf($)
+  const stat = await $.fs.stat(EXPORT_FILE).catch(() => undefined)
+  if (stat?.kind !== 'file') return
+  const seen = await read($, fileSeen)
+  if (seen?.project === project && seen.mtimeMs === stat.mtimeMs) return
+  await update($, fileSeen, () => ({ project, mtimeMs: stat.mtimeMs }))
+  const markdown = await $.fs.read(EXPORT_FILE).catch(() => undefined)
+  if (typeof markdown !== 'string' || !markdown.startsWith(EXPORT_MARK)) return
+  const saved = await $.store.get(keyOfSync(project))
+  if (saved === markdown) return
+  await $.store.set(keyOfSync(project), markdown)
+  if (typeof saved !== 'string') return
+
+  const known = await read($, branches)
+  let result: ReturnType<typeof syncFile> | undefined
+  await change($, [keyOfProject(project), GLOBAL_KEY], all => {
+    result = syncFile(all, parseMarkdown(saved), parseMarkdown(markdown), project, Date.now(), known)
+    return result.list
+  })
+  const { added, restored, updated, archive } = result!
+  const parts = [
+    added && `${added} added`,
+    restored && `${restored} back from the archive`,
+    updated && `${updated} updated`,
+  ].filter(Boolean)
+  if (parts.length > 0) $.ui.toast(`📝 ${EXPORT_FILE} changed: ${parts.join(', ')}`)
+  if (archive.length > 0) {
+    await archiveNotes($, archive, `${plural(archive.length, 'note')} removed from ${EXPORT_FILE}`)
+  }
 }
 
 /** Reads NOTES.md from the session's folder into the notepad (see mergeImport). */
@@ -332,6 +390,8 @@ const importNotes = async ($: EngineInterface, replace: boolean) => {
     counts = merged
     return list
   })
+  // The notes now hold the file: later edits to it are what the poll applies.
+  await markSynced($, project, markdown)
   const { added, updated, removed } = counts
   if (replace) {
     return `📝 Replaced ${plural(removed, 'note')} with ${plural(parsed.length, 'note')} from ${EXPORT_FILE}.`
@@ -380,6 +440,9 @@ export const register: Register = (on, options) => {
     await update($, folder, () => project)
     await readBranches($)
     await reload($, project)
+    // NOTES.md edits made since the last session, then any made during this one.
+    await pollFile($).catch(() => undefined)
+    $.clock.every(POLL_MS, () => void pollFile($).catch(() => undefined))
     // Overdue notes, here (on this branch) and global, are the first thing the session shows.
     const shown = onBranch(await read($, notes), project, await read($, branches))
     const late = overdue(shown, project, localDate(Date.now()))

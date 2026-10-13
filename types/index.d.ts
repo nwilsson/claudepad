@@ -39,6 +39,9 @@ export type Scope = 'branch' | 'project' | 'global'
 /** The project's git branches, as last read: the checked-out one (null when none is) and every local one. */
 export type Branches = { current: string | null; all: string[] }
 
+/** The session folder's NOTES.md as the last poll saw it: whose folder, and its modification time. */
+export type FileSeen = { project: string; mtimeMs: number }
+
 /** The multi-line editor while it is open. */
 export type EditorSession = {
   /** The note being edited, or 'new' for a note not saved yet. */
@@ -86,6 +89,8 @@ declare module 'claude-code' {
       isByDue: boolean
       /** The session folder's git branches, read again whenever they may have changed. */
       branches: Branches
+      /** NOTES.md as the last poll saw it, so an unchanged file is not read again. */
+      fileSeen: FileSeen | null
     }
   }
 }

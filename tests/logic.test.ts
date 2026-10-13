@@ -24,6 +24,7 @@ import {
   preview,
   resolvePath,
   statusFor,
+  syncFile,
   tagCounts,
   tagged,
   toMarkdown,
@@ -403,4 +404,41 @@ test('branch notes export under their own heading and import back onto their bra
   const replaced = mergeImport(list, parseMarkdown('- [ ] fresh\n'), '/work/demo', true, 10, branches)
   expect(replaced.list.map(n => n.text)).toEqual(['other work', 'fresh'])
   expect(replaced.removed).toBe(3)
+})
+
+test('a NOTES.md edit adds new lines, applies marks, archives removed lines and restores put-back ones', () => {
+  const list = [
+    note('keep', { id: 'k' }),
+    note('drop', { id: 'd' }),
+    note('tick', { id: 't' }),
+    note('global drop', { id: 'g', project: null }),
+    note('shelved', { id: 's', archivedAt: 1 }),
+    note('elsewhere drop', { id: 'e', project: '/work/other' }),
+  ]
+  const before = parseMarkdown('## demo\n- [ ] keep\n- [ ] drop\n- [ ] tick\n## Global\n- [ ] global drop\n')
+  const after = parseMarkdown('## demo\n- [ ] keep\n- [x] tick\n- [ ] new one\n- [ ] shelved\n## Global\n')
+  const result = syncFile(list, before, after, '/work/demo', 5)
+  expect([result.added, result.updated, result.restored]).toEqual([1, 1, 1])
+  // Archiving is left to the caller, which offers undo.
+  expect(result.archive).toEqual(['d', 'g'])
+  const byId = new Map(result.list.map(n => [n.id, n]))
+  expect(byId.get('t')).toMatchObject({ isDone: true, doneAt: 5 })
+  expect(byId.get('s')!.archivedAt).toBeUndefined()
+  expect(byId.get('e')).toEqual(list[5])
+  expect(result.list.at(-1)).toMatchObject({ text: 'new one', project: '/work/demo' })
+
+  // An archived note whose line was in the file all along stays archived.
+  const still = syncFile(list, parseMarkdown('- [ ] shelved\n- [ ] keep\n'), parseMarkdown('- [ ] shelved\n'), '/work/demo', 5)
+  expect([still.restored, still.archive]).toEqual([0, ['k']])
+
+  // A line the edit left alone changes nothing: "keep", ticked in the notepad
+  // since the export, stays done, and "gone for good" (deleted) stays gone.
+  const ticked = [note('keep', { id: 'k', isDone: true }), note('other', { id: 'o' })]
+  const file = '- [ ] keep\n- [ ] gone for good\n- [ ] other\n'
+  const edited = syncFile(ticked, parseMarkdown(file), parseMarkdown(file.replace('- [ ] other', '- [x] other')), '/work/demo', 5)
+  expect([edited.added, edited.updated]).toEqual([0, 1])
+  expect(edited.list.map(n => [n.text, n.isDone])).toEqual([
+    ['keep', true],
+    ['other', true],
+  ])
 })

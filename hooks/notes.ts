@@ -149,6 +149,9 @@ export const keyOfProject = (project: string | null | undefined) =>
 
 export const keyOf = (note: Note) => keyOfProject(note.project)
 
+/** The store key of the project's NOTES.md as last synced (see syncFile): `sync:` and the folder, as keyOfProject spells it. */
+export const keyOfSync = (project: string) => `sync:${keyOfProject(project).slice(PROJECT_PREFIX.length)}`
+
 /** A store key that holds notes in the per-project layout. */
 export const isNotesKey = (key: string) => key === GLOBAL_KEY || key.startsWith(PROJECT_PREFIX)
 
@@ -604,4 +607,60 @@ export const mergeImport = (
     added += 1
   })
   return { list, added, updated, removed: all.length - kept.length }
+}
+
+/** A file line's match key, as the import compares it. */
+const parsedKey = (item: ParsedNote) =>
+  importKey(item.where, item.where === 'global' ? undefined : item.branch, item.text)
+
+/** A note's match key when it is this project's or global; undefined for another project's. */
+const noteKey = (note: Note, project: string) =>
+  isGlobal(note)
+    ? importKey('global', undefined, note.text)
+    : isHere(note, project)
+      ? importKey('project', note.branch, note.text)
+      : undefined
+
+/**
+ * An outside edit of the exported NOTES.md, from `before` (the file as last
+ * synced) to `after`. Only what the edit changed applies, so a line left as
+ * it was never undoes a change made in the notepad since: a line new to the
+ * file adds a note, or brings back the archived note it matches; a line whose
+ * done or pinned mark changed passes it on, as an import merges it; and a
+ * line gone from the file archives its note. The archive is left to the
+ * caller, which offers undo: `archive` names the notes. Only this project's
+ * notes (those of other branches never match) and the global ones are touched.
+ */
+export const syncFile = (
+  all: readonly Note[],
+  before: readonly ParsedNote[],
+  after: readonly ParsedNote[],
+  project: string,
+  now: number,
+  branches = NO_BRANCHES,
+) => {
+  // Each line's marks as last synced, by key; the first of two alike.
+  const marks = new Map<string, string>()
+  for (const item of before) {
+    if (!marks.has(parsedKey(item))) marks.set(parsedKey(item), `${item.isDone} ${item.isPinned}`)
+  }
+  const was = new Set(marks.keys())
+  const is = new Set(after.map(parsedKey))
+  const changed = after.filter(item => marks.get(parsedKey(item)) !== `${item.isDone} ${item.isPinned}`)
+  // A line put back in the file restores the note it archived, the first of two alike.
+  const back = new Set<string>()
+  const list = all.map(note => {
+    const key = noteKey(note, project)
+    if (!isArchived(note) || key === undefined || !is.has(key) || was.has(key) || back.has(key)) return note
+    back.add(key)
+    return unarchived(note)
+  })
+  const merged = mergeImport(list, changed, project, false, now, branches)
+  const archive = merged.list
+    .filter(note => {
+      const key = noteKey(note, project)
+      return !isArchived(note) && key !== undefined && was.has(key) && !is.has(key)
+    })
+    .map(note => note.id)
+  return { list: merged.list, added: merged.added, updated: merged.updated, restored: back.size, archive }
 }

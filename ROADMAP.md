@@ -59,7 +59,11 @@ or more).
 
 ## Phase 4: sync and workflow (M–L)
 
-- [ ] Watch `NOTES.md` for outside edits and re-import.
+- [x] Watch `NOTES.md` for outside edits and re-import.
+  - Polled, not watched: `$.clock.every` 3 s stats the session folder's `NOTES.md` and reads it only when its `mtimeMs` changed (`fileSeen` atom). The engine's own watch (`watchPaths`) is taken only from a classic SessionStart, so it would miss the folder after a directory change. A poll also runs at `session.start`, so edits made between sessions apply.
+  - Only a file starting with the export's mark line is followed. Each project's file as last synced is kept in the store under `sync:` and the folder (`keyOfSync`): set by export and import, and by the poll after it applies an edit. A file seen with nothing stored is only recorded, since there is nothing to compare it with.
+  - `syncFile` applies only what the edit changed, so a line left alone never undoes a change made in the notepad since (a tick, a delete for good): a line new to the file adds a note, or restores the archived note it matches; a line whose done or pinned mark changed passes it on; a line gone from the file archives its note through `archiveNotes`, so the pane and `/notes undo` can undo it. A changed line's text reads as one removed and one added: the old note is archived and a new one added. One toast says what was added, restored and updated.
+  - Two sessions on the same folder both poll; the second finds the stored copy already matching the file and does nothing, short of a tie.
 - [ ] Make the store path configurable, so notes can live in a git-tracked folder across machines.
 - [x] Branch-scoped notes.
   - A project note can carry `branch`, under the same store key. `git branch --format=%(HEAD)%(refname:short)` gives the current branch and every local one in one run (`parseBranches`); it runs at `session.start`, on a directory change, when `/notes` opens the pane, before each prompt (a switch in another terminal), and after a tool batch with a Bash or PowerShell call. A failed run, no git, or a detached HEAD is no branch. `$.session.repo()` has no branch, and watching `.git/HEAD` would need `watchPaths` from a classic SessionStart, so it is not done: an outside switch shows at the next prompt.
