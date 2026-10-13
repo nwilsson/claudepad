@@ -33,7 +33,9 @@ mod's own store under your Claude Code config folder.
   clickable tag bar; `/notes tags` lists them.
 - **Due dates.** Write `#due:2026-10-20` in a note. A session starts with a
   toast naming overdue notes, the status line counts them, and the pane
-  shows the date red once it has passed (amber on the day).
+  shows the date red once it has passed (amber on the day). **Sort: due**
+  in the pane lists the earliest date first, and `list_notes` tells Claude
+  which notes are overdue or due today.
 - **File links.** A `path:line` (or `path:line:column`) in a note, such as
   `hooks/register.tsx:42`, gets an **open** button that opens the file at
   that line in VS Code (`code -g`). The `editor` option switches to Cursor or

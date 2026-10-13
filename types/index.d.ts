@@ -73,6 +73,8 @@ declare module 'claude-code' {
       lastArchive: ArchiveUndo | null
       /** The pane shows the archive view (done notes by week, archived notes). */
       isArchiveView: boolean
+      /** The pane lists notes by due date (earliest first) instead of by when they were added. */
+      isByDue: boolean
     }
   }
 }

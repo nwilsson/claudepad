@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
+  asText,
   doneByWeek,
   dueOf,
   editorCommand,
@@ -192,6 +193,73 @@ test('overdue: open notes here and global due before today, earliest first; stat
   ])
   expect(statusFor(list, '/work/demo', '2026-10-12')).toBe('📝 3 here · 2 global · ⏰ 2 overdue')
   expect(statusFor(list, '/work/demo')).toBe('📝 3 here · 2 global')
+})
+
+test('by due: pinned and open first still, then earliest date, then undated, each oldest first', () => {
+  const list = [
+    note('undated old', { createdAt: 1 }),
+    note('late #due:2026-10-30', { createdAt: 2 }),
+    note('undated new', { createdAt: 3 }),
+    note('early #due:2026-10-01', { createdAt: 4 }),
+    note('same day, newer #due:2026-10-01', { createdAt: 5 }),
+    note('pinned late #due:2026-12-01', { isPinned: true, createdAt: 6 }),
+    note('done early #due:2026-01-01', { isDone: true, createdAt: 7 }),
+    note('done undated', { isDone: true, createdAt: 0 }),
+  ]
+  expect(paneOrder(list, true).map(n => n.text)).toEqual([
+    'pinned late #due:2026-12-01',
+    'early #due:2026-10-01',
+    'same day, newer #due:2026-10-01',
+    'late #due:2026-10-30',
+    'undated old',
+    'undated new',
+    'done early #due:2026-01-01',
+    'done undated',
+  ])
+  // Without it, the order is as before: by when each was added.
+  expect(paneOrder(list).map(n => n.text).slice(1, 5)).toEqual([
+    'undated old',
+    'late #due:2026-10-30',
+    'undated new',
+    'early #due:2026-10-01',
+  ])
+})
+
+test('the listing marks open notes overdue or due today, and ends with the date it was given', () => {
+  const list = [
+    note('late #due:2026-10-10'),
+    note('today #due:2026-10-12'),
+    note('later #due:2026-10-30'),
+    note('done late #due:2026-10-01', { isDone: true }),
+    note('global late #due:2026-10-01', { project: null }),
+  ]
+  expect(asText(list, '/work/demo', '', false, '2026-10-12').split('\n')).toEqual([
+    'Notes for this project (demo):',
+    '- [ ] late #due:2026-10-10 (overdue)',
+    '- [ ] today #due:2026-10-12 (due today)',
+    '- [ ] later #due:2026-10-30',
+    '- [x] done late #due:2026-10-01',
+    '',
+    'Global notes:',
+    '- [ ] global late #due:2026-10-01 (overdue)',
+    '',
+    'Tags in use: #due (5)',
+    '',
+    'Today is 2026-10-12.',
+  ])
+  // The mark comes before the id, and a search marks and dates too.
+  expect(asText(list, '/work/demo', 'late', true, '2026-10-12').split('\n')).toEqual([
+    '4 notes matching "late":',
+    '- [ ] late #due:2026-10-10 (overdue) (id: late #due:2026-10-10) (this project)',
+    '- [ ] later #due:2026-10-30 (id: later #due:2026-10-30) (this project)',
+    '- [x] done late #due:2026-10-01 (id: done late #due:2026-10-01) (this project)',
+    '- [ ] global late #due:2026-10-01 (overdue) (id: global late #due:2026-10-01) (global)',
+    '',
+    'Today is 2026-10-12.',
+  ])
+  // With no date given, nothing is marked; with no dated note listed, no date is added.
+  expect(asText(list, '/work/demo')).not.toContain('(overdue)')
+  expect(asText([note('plain')], '/work/demo', '', false, '2026-10-12')).not.toContain('Today is')
 })
 
 test('a file reference is a path with an extension, then :line and maybe :column', () => {

@@ -13,6 +13,7 @@ import {
   asText,
   baseName,
   doneByWeek,
+  dueOf,
   editorCommand,
   groupByKey,
   indented,
@@ -65,6 +66,7 @@ const query = atom({ plugin: 'claudepad', key: 'query' } as const, '')
 const activeTag = atom({ plugin: 'claudepad', key: 'tag' } as const, null as string | null)
 const lastArchive = atom({ plugin: 'claudepad', key: 'lastArchive' } as const, null as ArchiveUndo | null)
 const isArchiveView = atom({ plugin: 'claudepad', key: 'isArchiveView' } as const, false)
+const isByDue = atom({ plugin: 'claudepad', key: 'isByDue' } as const, false)
 
 /** Open pinned notes in every project, worked out again only when the notes change. */
 const pinned = derive([notes], list => live(list).filter(note => note.isPinned && !note.isDone))
@@ -367,7 +369,7 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'list_notes',
       description:
-        "List the notes in the user's notepad: this project's notes and the global ones, with whether each is done or pinned, and each note's id (for complete_note and update_note). With `query`, search every note (all projects) for notes containing all of its words; a #word in the query matches that tag exactly. Also lists the tags in use.",
+        "List the notes in the user's notepad: this project's notes and the global ones, with whether each is done or pinned, and each note's id (for complete_note and update_note). A note with a #due:YYYY-MM-DD date is marked (overdue) or (due today) while open, and a list with dated notes ends with today's date. With `query`, search every note (all projects) for notes containing all of its words; a #word in the query matches that tag exactly. Also lists the tags in use.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -426,7 +428,7 @@ export const register: Register = (on, options) => {
         return { text: 'Usage: /notes find <text>' }
       }
       await update($, query, () => text)
-      return { text: asText(await read($, notes), await projectOf($), text) }
+      return { text: asText(await read($, notes), await projectOf($), text, false, localDate(Date.now())) }
     }
     const exportArgs = /^\s*export\b(.*)$/i.exec(e.args)
     if (exportArgs) {
@@ -508,7 +510,13 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: LIST_TOOL }, async ($, e) => {
     const search = (e as unknown as { query?: unknown }).query
     return {
-      result: asText(await read($, notes), await projectOf($), typeof search === 'string' ? search : '', true),
+      result: asText(
+        await read($, notes),
+        await projectOf($),
+        typeof search === 'string' ? search : '',
+        true,
+        localDate(Date.now()),
+      ),
     }
   })
 
@@ -759,12 +767,18 @@ export const register: Register = (on, options) => {
     const current = live(list)
     const allHere = current.filter(note => isHere(note, project))
     const allGlobal = current.filter(isGlobal)
-    const here = paneOrder(allHere.filter(shown))
-    const global = paneOrder(allGlobal.filter(shown))
+    const byDue = await read($, isByDue)
+    const here = paneOrder(allHere.filter(shown), byDue)
+    const global = paneOrder(allGlobal.filter(shown), byDue)
     // Only while searching: matches from every other project too.
     const elsewhere = isSearching
-      ? paneOrder(current.filter(note => !isGlobal(note) && !isHere(note, project) && shown(note)))
+      ? paneOrder(
+          current.filter(note => !isGlobal(note) && !isHere(note, project) && shown(note)),
+          byDue,
+        )
       : []
+    // The sort choice shows once a note here or global has a due date (or while sorting by one).
+    const isDated = byDue || [...allHere, ...allGlobal].some(note => dueOf(note.text) !== undefined)
 
     const submit = async (value: string) => {
       const text = value.trim()
@@ -945,6 +959,18 @@ export const register: Register = (on, options) => {
                 all tags
               </Button>
             )}
+          </Box>
+        )}
+
+        {isDated && (
+          <Box gap={1}>
+            <Text dimColor>Sort:</Text>
+            <Button key="sort-added" plain dimColor={byDue} onPress={() => update($, isByDue, () => false)}>
+              {byDue ? '○ added' : '● added'}
+            </Button>
+            <Button key="sort-due" plain dimColor={!byDue} onPress={() => update($, isByDue, () => true)}>
+              {byDue ? '● due' : '○ due'}
+            </Button>
           </Box>
         )}
 

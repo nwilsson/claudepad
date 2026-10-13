@@ -251,12 +251,25 @@ export const statusFor = (list: readonly Note[], project: string, today?: string
   return `📝 ${here} here · ${global} global${late ? ` · ⏰ ${late} overdue` : ''}`
 }
 
-/** The pane's order: pinned first, then open before done, then oldest. */
-export const paneOrder = (list: readonly Note[]) =>
+/** Earliest due date first, notes with none after. */
+const byDue = (a: Note, b: Note) => {
+  const [first, second] = [dueOf(a.text), dueOf(b.text)]
+  if (first === second) return 0
+  if (first === undefined) return 1
+  if (second === undefined) return -1
+  return first.localeCompare(second)
+}
+
+/**
+ * The pane's order: pinned first, then open before done, then oldest. With
+ * `isByDue`, earliest due date before oldest, and notes with none last.
+ */
+export const paneOrder = (list: readonly Note[], isByDue = false) =>
   [...list].sort(
     (a, b) =>
       Number(b.isPinned) - Number(a.isPinned) ||
       Number(a.isDone) - Number(b.isDone) ||
+      (isByDue ? byDue(a, b) : 0) ||
       a.createdAt - b.createdAt,
   )
 
@@ -286,12 +299,22 @@ export const parseNoteArgs = (args: string): { text: string; where: Scope; isLas
   return { text: rest.trim(), where, isLast }
 }
 
-/** One line per note (more for a multi-line one), each ending in its id when `withIds`. */
-const lines = (list: readonly Note[], withIds: boolean) =>
+/** ` (overdue)` or ` (due today)` for an open note, measured against `today`; else nothing. */
+const dueMark = (note: Note, today: string | undefined) => {
+  const due = today === undefined || note.isDone ? undefined : dueOf(note.text)
+  return due === undefined || due > today! ? '' : due === today ? ' (due today)' : ' (overdue)'
+}
+
+/**
+ * One line per note (more for a multi-line one): marked overdue or due today
+ * when `today` is given, and ending in its id when `withIds`.
+ */
+const lines = (list: readonly Note[], withIds: boolean, today?: string) =>
   list
     .map(
       note =>
         `- [${note.isDone ? 'x' : ' '}]${note.isPinned ? ' (pinned)' : ''} ${indented(note.text, '      ')}` +
+        dueMark(note, today) +
         (withIds ? ` (id: ${note.id})` : ''),
     )
     .join('\n')
@@ -299,33 +322,40 @@ const lines = (list: readonly Note[], withIds: boolean) =>
 /**
  * The notes as /notes find and list_notes give them: this project's and
  * global, or a search over all. `withIds` (for Claude's tools) adds each
- * note's id, which complete_note and update_note take.
+ * note's id, which complete_note and update_note take. `today` (YYYY-MM-DD,
+ * local) marks open notes overdue or due today and, when a listed note has a
+ * due date, ends the text with the date, so a reader without a calendar can
+ * still judge the others.
  */
-export const asText = (all: readonly Note[], project: string, search = '', withIds = false) => {
+export const asText = (all: readonly Note[], project: string, search = '', withIds = false, today?: string) => {
   const list = live(all)
+  const dated = (shown: readonly Note[]) =>
+    today !== undefined && shown.some(note => dueOf(note.text) !== undefined) ? ['', `Today is ${today}.`] : []
   if (search.trim() !== '') {
     // Oldest first, whatever order the store keys hold the projects in.
     const found = list.filter(note => matches(note, search)).sort((a, b) => a.createdAt - b.createdAt)
     return found.length === 0
       ? `No notes match "${search.trim()}".`
-      : `${plural(found.length, 'note')} matching "${search.trim()}":\n` +
-          found
-            .map(note => {
-              const where = isGlobal(note) ? 'global' : isHere(note, project) ? 'this project' : baseName(note.project ?? '')
-              return `${lines([note], withIds)} (${where})`
-            })
-            .join('\n')
+      : [
+          `${plural(found.length, 'note')} matching "${search.trim()}":`,
+          ...found.map(note => {
+            const where = isGlobal(note) ? 'global' : isHere(note, project) ? 'this project' : baseName(note.project ?? '')
+            return `${lines([note], withIds, today)} (${where})`
+          }),
+          ...dated(found),
+        ].join('\n')
   }
   const here = list.filter(note => isHere(note, project))
   const global = list.filter(isGlobal)
   return [
     `Notes for this project (${baseName(project)}):`,
-    here.length ? lines(here, withIds) : '(none)',
+    here.length ? lines(here, withIds, today) : '(none)',
     '',
     'Global notes:',
-    global.length ? lines(global, withIds) : '(none)',
+    global.length ? lines(global, withIds, today) : '(none)',
     '',
     `Tags in use: ${tagCounts(list).map(([tag, n]) => `#${tag} (${n})`).join(', ') || '(none)'}`,
+    ...dated([...here, ...global]),
   ].join('\n')
 }
 
