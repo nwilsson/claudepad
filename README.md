@@ -7,9 +7,11 @@
 
 **A notepad pane for Claude Code: your notes sit next to the work, and Claude can read them too.**
 
-<!-- Hero screenshot: the pane docked beside a conversation, with a few tagged notes, one pinned and one 🌿 branch note.
-<p><img src="docs/images/pane.png" alt="The claudepad pane docked beside a Claude Code conversation" width="900"></p>
--->
+<p>
+  <img src="docs/demo.svg" alt="claudepad in action: adding notes from the prompt, a global note with a due date, Claude parking a follow-up, a note for the current branch, pinning, and marking a note done with the keyboard" width="640">
+  <br>
+  <sub>An illustration drawn from the mod's own pane output, not a screen recording.</sub>
+</p>
 
 Ideas, follow-ups and TODOs pile up while Claude works, and the transcript is
 a bad place to keep them. claudepad adds a notes pane inside Claude Code, in
@@ -47,13 +49,6 @@ Or ask Claude:
 - *"Park that as a note, we'll come back to it."*
 - *"What's on my notepad for this repo?"*
 - *"Tick off the notes you finished in this session."*
-
-<!-- Screenshot row: Claude adding a note (the toast) | the archive view, done by week.
-<p>
-  <img src="docs/images/claude-adds.png" alt="Claude adding a note while it works" width="440">
-  <img src="docs/images/archive.png" alt="The archive view: what you finished, week by week" width="440">
-</p>
--->
 
 ### Notes where you work
 
@@ -229,6 +224,7 @@ claude --plugin-dir /path/to/claudepad
 | `types/index.d.ts` | The note and state types |
 | `tests/` | Logic tests and engine tests with a mocked store, clock and folder |
 | `ROADMAP.md` | What was built, and the decisions behind it |
+| `scripts/demo/` | How `docs/demo.svg` is captured from the pane and built |
 
 Checks:
 
