@@ -109,7 +109,9 @@ test('with a notes folder, the plugin store is copied in once and notes live in 
   )
   await start($)
   expect(toasts).toEqual(['📝 Copied 2 notes into C:/Users/me/notes'])
-  expect(written.every(path => path.startsWith('C:/Users/me/notes/'))).toBe(true)
+  // The engine makes paths absolute against the working folder, and only Windows reads `C:/` as absolute.
+  expect(written.length).toBeGreaterThan(0)
+  expect(written.every(path => /\/Users\/me\/notes\/[^/]+\.json$/.test(path))).toBe(true)
 
   await run($, 'note', 'added')
   const file = files[fileNameOf('project:github.com/me/demo')]!
